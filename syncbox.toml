@@ -3,4 +3,4 @@
 name = "test-task"
 source = "/Users/lg/source"
 target = "/Users/lg/target"
-exclude = [".log"]
+exclude = [".log", "epub"]
