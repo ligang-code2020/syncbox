@@ -1,6 +1,6 @@
 # syncbox.toml
 [[sync]]
-name = "test-task"
+name = "watch-task"
 source = "/Users/lg/source"
 target = "/Users/lg/target"
 exclude = [".log", "epub"]
