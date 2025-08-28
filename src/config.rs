@@ -1,6 +1,6 @@
 use serde::Deserialize;
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 
 // 我们使用 TOML 作为配置文件格式
 // 这个结构体表示整个 syncbox.toml 文件的内容
