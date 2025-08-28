@@ -25,6 +25,13 @@ pub struct SyncTask {
     // 可选：要排除的文件或目录（支持 glob 模式）
     #[serde(default)]
     pub exclude: Vec<String>,
+
+    #[serde(default = "default_delete_extra")]
+    pub delete_extra: bool,
+}
+
+fn default_delete_extra() -> bool {
+    false
 }
 
 impl Config {

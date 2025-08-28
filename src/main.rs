@@ -1,10 +1,11 @@
-use tokio::time;
-use std::time::Duration;
 use clap::Parser;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher, recommended_watcher};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
+use std::time::Duration;
 use syncbox::sync;
+use tokio::time;
+use tokio::fs;
 
 /// A simple file synchronization tool
 #[derive(Parser)]
@@ -71,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
             dry_run,
         } => {
             log::info!("Syncing from {} to {}", source.display(), target.display());
-            sync_directories(&source, &target, dry_run, &[]).await?;
+            sync_directories(&source, &target, dry_run, &[], false).await?;
         }
 
         Command::Run {
@@ -97,7 +98,14 @@ async fn main() -> anyhow::Result<()> {
                 task.source.display(),
                 task.target.display()
             );
-            sync_directories(&task.source, &task.target, dry_run, &task.exclude).await?;
+            sync_directories(
+                &task.source,
+                &task.target,
+                dry_run,
+                &task.exclude,
+                task.delete_extra,
+            )
+            .await?;
         }
 
         Command::Watch {
@@ -117,6 +125,7 @@ async fn sync_directories(
     target: &PathBuf,
     dry_run: bool,
     exclude: &[String],
+    delete_extra: bool,
 ) -> anyhow::Result<()> {
     // 1. 扫描源目录
     let source_files = sync::scan_directory(&source, exclude)
@@ -178,11 +187,96 @@ async fn sync_directories(
         anyhow::bail!("Failed to copy {} files", failed_to_copy);
     }
 
+    if delete_extra {
+        delete_extra_files(&source, &target, dry_run, exclude).await?;
+    }
+
     Ok(())
 }
 
+async fn delete_extra_files(
+    source: &PathBuf,
+    target: &PathBuf,
+    dry_run: bool,
+    exclude: &[String],
+) -> anyhow::Result<()> {
+    use std::collections::HashSet;
 
+    // 1. 扫描源目录，收集所有文件的相对路径（String）
+    let source_files: HashSet<String> = sync::scan_directory(source, exclude)?
+        .into_iter()
+        .filter_map(|info| {
+            info.path
+                .strip_prefix(source)
+                .ok()
+                .map(|rel| rel.to_string_lossy().to_string()) // ✅ 在这里转成 String
+        })
+        .collect();
 
+    // 2. 递归遍历目标目录
+    let mut to_delete = Vec::new();
+    scan_target_for_deletion(
+        target,
+        target,
+        &source,
+        &source_files,
+        exclude,
+        &mut to_delete,
+    )
+    .await?;
+
+    // 3. 执行删除
+    for path in &to_delete {
+        if dry_run {
+            println!("💡 Would delete: {}", path.display());
+        } else {
+            match tokio::fs::remove_file(path).await {
+                Ok(()) => println!("🗑️  Deleted: {}", path.display()),
+                Err(e) => eprintln!("❌ Failed to delete '{}': {}", path.display(), e),
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// 递归扫描目标目录，找出需要删除的文件
+async fn scan_target_for_deletion(
+    current: &PathBuf,
+    target_root: &PathBuf,
+    source_root: &PathBuf,
+    source_files: &std::collections::HashSet<String>,
+    exclude: &[String],
+    to_delete: &mut Vec<PathBuf>,
+) -> std::io::Result<()> {
+    let mut dir = fs::read_dir(current).await?;
+
+    while let Some(entry) = dir.next_entry().await? {
+        let path = entry.path();
+
+        if path.is_dir() {
+            // ✅ 使用 Box::pin 包装递归调用，引入间接层
+            let future = scan_target_for_deletion(
+                &path,
+                target_root,
+                source_root,
+                source_files,
+                exclude,
+                to_delete,
+            );
+            Box::pin(future).await?;
+        } else {
+            if let Ok(rel_path) = path.strip_prefix(target_root) {
+                let rel_str = rel_path.to_string_lossy().to_string();
+                if !source_files.contains(&rel_str) && !sync::should_exclude(&path, source_root, exclude) {
+                    to_delete.push(path);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
 
 async fn watch_task(name: String, config_path: PathBuf, delay_ms: u64) -> anyhow::Result<()> {
     // 1. 加载配置文件
@@ -191,7 +285,8 @@ async fn watch_task(name: String, config_path: PathBuf, delay_ms: u64) -> anyhow
         .map_err(|e| anyhow::anyhow!("Config error: {}", e))?;
 
     // 2. 查找指定名称的任务
-    let task = config.find_task(&name)
+    let task = config
+        .find_task(&name)
         .ok_or_else(|| anyhow::anyhow!("Task '{}' not found in config", name))?;
 
     println!(
@@ -236,11 +331,19 @@ async fn watch_task(name: String, config_path: PathBuf, delay_ms: u64) -> anyhow
                 eprintln!("📁 File watch error: {}", error);
             }
         }
-    }).map_err(|e| anyhow::anyhow!("Failed to create file watcher: {}", e))?;
+    })
+    .map_err(|e| anyhow::anyhow!("Failed to create file watcher: {}", e))?;
 
     // 5. 开始监听源目录（递归监听所有子目录）
-    watcher.watch(&task.source, RecursiveMode::Recursive)
-        .map_err(|e| anyhow::anyhow!("Failed to watch directory '{}': {}", task.source.display(), e))?;
+    watcher
+        .watch(&task.source, RecursiveMode::Recursive)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to watch directory '{}': {}",
+                task.source.display(),
+                e
+            )
+        })?;
 
     log::info!("Started watching: {}", task.source.display());
 
@@ -255,7 +358,10 @@ async fn watch_task(name: String, config_path: PathBuf, delay_ms: u64) -> anyhow
             break; // channel 被关闭，退出循环（通常是程序终止）
         }
 
-        log::info!("Change detected, starting debounce period of {}ms...", delay_ms);
+        log::info!(
+            "Change detected, starting debounce period of {}ms...",
+            delay_ms
+        );
 
         // 6.2 进入防抖等待状态
         //     使用一个内层循环，持续检查是否有新事件到来
@@ -286,7 +392,15 @@ async fn watch_task(name: String, config_path: PathBuf, delay_ms: u64) -> anyhow
         // 7. 执行同步操作
         //    使用已有的 sync_directories 函数，支持 exclude 规则
         println!("📁 Detected stable changes → syncing...");
-        match sync_directories(&task.source, &task.target, false, &task.exclude).await {
+        match sync_directories(
+            &task.source,
+            &task.target,
+            false,
+            &task.exclude,
+            task.delete_extra,
+        )
+        .await
+        {
             Ok(()) => {
                 println!("✅ Sync completed successfully");
             }

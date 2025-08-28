@@ -115,7 +115,7 @@ pub fn copy_file(source: &Path, target: &Path, dry_run: bool) -> std::io::Result
 }
 
 // 判断一个路径是否应该被排除
-fn should_exclude(path: &Path, root: &Path, exclude_patterns: &[String]) -> bool {
+pub fn should_exclude(path: &Path, root: &Path, exclude_patterns: &[String]) -> bool {
     // 我们需要将路径转换为“相对于 root 的路径”
     // 比如：/Users/you/syncbox-test/src/a.tmp → a.tmp
     let relative = match path.strip_prefix(root) {
