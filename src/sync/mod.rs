@@ -1,5 +1,5 @@
 use crate::error::SyncError;
-use crate::sync;
+
 use notify::{Event, EventKind, RecursiveMode, Watcher, recommended_watcher};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -209,6 +209,7 @@ mod filter {
 
 mod file_ops {
     use super::*;
+    use crate::sync;
     /// 复制文件（自动创建目标目录）
     ///
     /// # 参数
@@ -329,7 +330,7 @@ mod file_ops {
                 if let Ok(rel_path) = path.strip_prefix(target_root) {
                     let rel_str = rel_path.to_string_lossy().to_string();
                     if !source_files.contains(&rel_str)
-                        && !sync::should_exclude(&path, source_root, exclude)
+                        && !should_exclude(&path, source_root, exclude)
                     {
                         to_delete.push(path);
                     }
@@ -409,7 +410,7 @@ mod sync_logic {
 
             // 获取目标文件信息（如果存在）
             let target_info = if target_path.exists() {
-                sync::FileInfo::from_path(&target_path).ok()
+                FileInfo::from_path(&target_path).ok()
             } else {
                 None
             };
@@ -449,7 +450,7 @@ mod sync_logic {
         }
 
         if options.delete_extra {
-            sync::delete_extra_files(&source, &target, options.dry_run, &options.excludes).await?;
+            delete_extra_files(&source, &target, options.dry_run, &options.excludes).await?;
         }
 
         Ok(())
@@ -475,29 +476,8 @@ mod watcher {
     ///
     /// # 注意
     /// 此函数会阻塞运行，直到监听被中断。
-    pub async fn watch_task(
-        name: String,
-        config_path: PathBuf,
-        delay_ms: u64,
-    ) -> anyhow::Result<()> {
-        // 1. 加载配置文件
-        info!("Loading config for task: {}", name);
-        let config = crate::config::Config::from_file(&config_path)
-            .map_err(|e| anyhow::anyhow!("Config error: {}", e))?;
-
-        // 2. 查找指定名称的任务
-        let task = config
-            .find_task(&name)
-            .ok_or_else(|| anyhow::anyhow!("Task '{}' not found in config", name))?;
-
-        println!(
-            "👀 Watching task '{}' ({} → {})",
-            task.name,
-            task.source.display(),
-            task.target.display()
-        );
-
-        let options = sync_logic::SyncOptions {
+    pub async fn watch_task(task: &crate::config::SyncTask, delay_ms: u64) -> anyhow::Result<()> {
+        let options = SyncOptions {
             dry_run: false, // watch 模式通常不是 dry_run
             excludes: task.exclude.clone(),
             delete_extra: task.delete_extra,
@@ -553,7 +533,11 @@ mod watcher {
                 )
             })?;
 
-        info!("Started watching: {}", task.source.display());
+        info!(
+            "Started watching: {} → {}",
+            task.source.display(),
+            task.target.display()
+        );
 
         // 6. 主事件循环：接收文件变化事件并处理
         loop {
@@ -599,13 +583,7 @@ mod watcher {
 
             // 7. 执行同步操作
             println!("📁 Detected stable changes → syncing...");
-            match sync_directories(
-                &task.source,
-                &task.target,
-                &options
-            )
-            .await
-            {
+            match sync_directories(&task.source, &task.target, &options).await {
                 Ok(()) => {
                     println!("✅ Sync completed successfully");
                 }
@@ -630,5 +608,5 @@ mod watcher {
 pub use file_ops::{copy_file, delete_extra_files};
 pub use filter::{should_exclude, should_sync};
 pub use scanner::scan_directory;
-pub use sync_logic::{sync_directories,SyncOptions};
+pub use sync_logic::{SyncOptions, sync_directories};
 pub use watcher::watch_task;

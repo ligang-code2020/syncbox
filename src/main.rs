@@ -1,68 +1,17 @@
 use clap::Parser;
-use std::path::PathBuf;
-use syncbox::sync;
+use syncbox::{cli, logging, sync};
 use tracing::info;
-
-#[derive(Parser)]
-#[command(name = "syncbox")]
-#[command(about = "Sync files between directories", long_about = None)]
-struct Args {
-    /// Subcommand
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(clap::Subcommand)]
-enum Command {
-    /// Sync a directory to another location
-    Sync {
-        /// Source directory
-        source: PathBuf,
-
-        /// Target directory
-        target: PathBuf,
-
-        /// Perform a dry run without making changes
-        #[arg(long)]
-        dry_run: bool,
-    },
-    Run {
-        /// Name of the task to run (from config)
-        name: String,
-
-        /// Config file path (optional, default: ./syncbox.toml)
-        #[arg(long, default_value = "syncbox.toml")]
-        config: PathBuf,
-
-        /// Perform a dry run
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    Watch {
-        /// Name of the task to watch
-        name: String,
-
-        /// Config file path (default: syncbox.toml)
-        #[arg(long, default_value = "syncbox.toml")]
-        config: PathBuf,
-
-        /// Watch delay in milliseconds (default: 500ms)
-        #[arg(long, default_value = "500")]
-        delay: u64,
-    },
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_logger(); // 初始化日志
+    logging::init_logger(); // 初始化日志
     // 后续所有 tracing 日志都可用
     tracing::info!("SyncBox 启动");
     tracing::debug!("这是 debug 日志，只有 RUST_LOG=debug 时才显示");
 
-    let args = Args::parse();
+    let args = cli::Args::parse();
     match args.command {
-        Command::Sync {
+        cli::Command::Sync {
             source,
             target,
             dry_run,
@@ -81,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
             sync::sync_directories(&source, &target, &options).await?;
         }
 
-        Command::Run {
+        cli::Command::Run {
             name,
             config,
             dry_run,
@@ -113,24 +62,23 @@ async fn main() -> anyhow::Result<()> {
             sync::sync_directories(&task.source, &task.target, &options).await?;
         }
 
-        Command::Watch {
+        cli::Command::Watch {
             name,
             config,
             delay,
         } => {
-            sync::watch_task(name, config, delay).await?;
+            info!("Watching task: {}", name);
+
+            let config = syncbox::config::Config::from_file(&config)
+                .map_err(|e| anyhow::anyhow!("Config error: {}", e))?;
+
+            let task = config
+                .find_task(&name)
+                .ok_or_else(|| anyhow::anyhow!("Task '{}' not found in config", name))?;
+
+            sync::watch_task(&task, delay).await?;
         }
     }
 
     Ok(())
-}
-
-use tracing_subscriber::{EnvFilter, fmt};
-
-pub fn init_logger() {
-    // 从 RUST_LOG 环境变量读取日志级别
-    // 默认 info，可设置 RUST_LOG=debug 查看详细日志
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-
-    fmt().with_env_filter(filter).init();
 }
