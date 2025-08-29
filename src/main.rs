@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::path::PathBuf;
 use syncbox::sync;
-use tracing::{info};
+use tracing::info;
 
 #[derive(Parser)]
 #[command(name = "syncbox")]
@@ -72,7 +72,13 @@ async fn main() -> anyhow::Result<()> {
                 source.display(),
                 target.display()
             );
-            sync::sync_directories(&source, &target, dry_run, &[], false).await?;
+
+            let options = sync::SyncOptions {
+                dry_run,
+                excludes: vec![],
+                delete_extra: false,
+            };
+            sync::sync_directories(&source, &target, &options).await?;
         }
 
         Command::Run {
@@ -97,15 +103,14 @@ async fn main() -> anyhow::Result<()> {
                 &task.target.display()
             );
 
-            // 3. 执行同步
-            sync::sync_directories(
-                &task.source,
-                &task.target,
+            let options = sync::SyncOptions {
                 dry_run,
-                &task.exclude,
-                task.delete_extra,
-            )
-            .await?;
+                excludes: task.exclude.clone(),
+                delete_extra: task.delete_extra,
+            };
+
+            // 3. 执行同步
+            sync::sync_directories(&task.source, &task.target, &options).await?;
         }
 
         Command::Watch {
