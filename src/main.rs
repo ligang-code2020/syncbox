@@ -1,10 +1,10 @@
 use clap::Parser;
-use syncbox::{cli, logging, sync};
+use syncbox::{cli, infra, sync};
 use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    logging::init_logger(); // 初始化日志
+    infra::logging::init_logger(); // 初始化日志
     // 后续所有 tracing 日志都可用
     tracing::info!("SyncBox 启动");
     tracing::debug!("这是 debug 日志，只有 RUST_LOG=debug 时才显示");

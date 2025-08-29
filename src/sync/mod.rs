@@ -1,5 +1,3 @@
-use crate::error::SyncError;
-
 use notify::{Event, EventKind, RecursiveMode, Watcher, recommended_watcher};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -82,8 +80,9 @@ mod scanner {
         let entries = match fs::read_dir(root) {
             Ok(entries) => entries,
             Err(e) => {
-                // 👇 用户需要知道这个！
+
                 eprintln!("❌️  Cannot read directory '{}': {}", root.display(), e);
+
                 return Ok(files);
             }
         };
