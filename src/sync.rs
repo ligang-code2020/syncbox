@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use tracing::{info, debug, warn, error};
+use crate::error::SyncError;
 
 #[derive(Debug, Clone)]
 pub struct FileInfo {
@@ -66,7 +68,7 @@ pub fn scan_directory<P: AsRef<Path>>(
 
         // 👇 新增：检查是否应该排除
         if should_exclude(&path, root, exclude_patterns) {
-            log::debug!("Skipped (excluded): {}", path.display());
+            debug!("Skipped (excluded): {}", path.display());
             continue;
         }
 

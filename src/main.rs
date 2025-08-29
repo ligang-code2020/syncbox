@@ -4,9 +4,9 @@ use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::time::Duration;
 use syncbox::sync;
-use tokio::time;
 use tokio::fs;
-
+use tokio::time;
+use tracing::{debug, error, info, warn};
 /// A simple file synchronization tool
 #[derive(Parser)]
 #[command(name = "syncbox")]
@@ -60,10 +60,11 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 初始化日志系统
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Info) // 默认显示 Info 及以上
-        .init();
+    init_logger(); // 初始化日志
+    // 后续所有 tracing 日志都可用
+    tracing::info!("SyncBox 启动");
+    tracing::debug!("这是 debug 日志，只有 RUST_LOG=debug 时才显示");
+
     let args = Args::parse();
     match args.command {
         Command::Sync {
@@ -71,7 +72,11 @@ async fn main() -> anyhow::Result<()> {
             target,
             dry_run,
         } => {
-            log::info!("Syncing from {} to {}", source.display(), target.display());
+            info!(
+                "Sync: copying file {} → {}",
+                source.display(),
+                target.display()
+            );
             sync_directories(&source, &target, dry_run, &[], false).await?;
         }
 
@@ -80,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
             config,
             dry_run,
         } => {
-            log::info!("Running task: {}", name);
+            info!("Running task: {}", name);
 
             // 1. 加载配置文件
             let config = syncbox::config::Config::from_file(&config)
@@ -91,13 +96,13 @@ async fn main() -> anyhow::Result<()> {
                 .find_task(&name)
                 .ok_or_else(|| anyhow::anyhow!("Task '{}' not found in config", name))?;
 
-            // 3. 执行同步
-            log::info!(
-                "Task '{}' found: {} → {}",
-                task.name,
-                task.source.display(),
-                task.target.display()
+            info!(
+                "Run: copying file {} → {}",
+                &task.source.display(),
+                &task.target.display()
             );
+
+            // 3. 执行同步
             sync_directories(
                 &task.source,
                 &task.target,
@@ -268,7 +273,9 @@ async fn scan_target_for_deletion(
         } else {
             if let Ok(rel_path) = path.strip_prefix(target_root) {
                 let rel_str = rel_path.to_string_lossy().to_string();
-                if !source_files.contains(&rel_str) && !sync::should_exclude(&path, source_root, exclude) {
+                if !source_files.contains(&rel_str)
+                    && !sync::should_exclude(&path, source_root, exclude)
+                {
                     to_delete.push(path);
                 }
             }
@@ -280,7 +287,7 @@ async fn scan_target_for_deletion(
 
 async fn watch_task(name: String, config_path: PathBuf, delay_ms: u64) -> anyhow::Result<()> {
     // 1. 加载配置文件
-    log::info!("Loading config for task: {}", name);
+    info!("Loading config for task: {}", name);
     let config = syncbox::config::Config::from_file(&config_path)
         .map_err(|e| anyhow::anyhow!("Config error: {}", e))?;
 
@@ -322,7 +329,7 @@ async fn watch_task(name: String, config_path: PathBuf, delay_ms: u64) -> anyhow
                     }
                     _ => {
                         // 其他事件（如 Metadata、Access、Other）不处理
-                        log::debug!("Ignored event: {:?}", event);
+                        debug!("Ignored event: {:?}", event);
                     }
                 }
             }
@@ -345,7 +352,7 @@ async fn watch_task(name: String, config_path: PathBuf, delay_ms: u64) -> anyhow
             )
         })?;
 
-    log::info!("Started watching: {}", task.source.display());
+    info!("Started watching: {}", task.source.display());
 
     // 6. 主事件循环：接收文件变化事件并处理
     loop {
@@ -354,11 +361,11 @@ async fn watch_task(name: String, config_path: PathBuf, delay_ms: u64) -> anyhow
 
         // 6.1 等待第一个文件变化事件
         if rx.recv().await.is_none() {
-            log::info!("Watcher channel closed, exiting...");
+            info!("Watcher channel closed, exiting...");
             break; // channel 被关闭，退出循环（通常是程序终止）
         }
 
-        log::info!(
+        info!(
             "Change detected, starting debounce period of {}ms...",
             delay_ms
         );
@@ -371,18 +378,18 @@ async fn watch_task(name: String, config_path: PathBuf, delay_ms: u64) -> anyhow
             match time::timeout(Duration::from_millis(delay_ms), rx.recv()).await {
                 Ok(Some(_)) => {
                     // 又有新事件！说明文件还在被修改，重新开始等待
-                    log::debug!("Another change detected, restarting debounce timer...");
+                    debug!("Another change detected, restarting debounce timer...");
                     continue; // 继续等待
                 }
                 Ok(None) => {
                     // channel 被关闭（发送端关闭）
-                    log::info!("Watcher channel closed during debounce.");
+                    info!("Watcher channel closed during debounce.");
                     return Ok(()); // 正常退出
                 }
                 Err(_) => {
                     // timeout 超时！说明在 delay_ms 毫秒内没有新事件
                     // 👉 这正是我们想要的：用户已经“停止”修改文件
-                    log::info!("Debounce period ended with no further changes.");
+                    info!("Debounce period ended with no further changes.");
                     break; // 跳出内层循环，准备执行同步
                 }
             }
@@ -415,4 +422,14 @@ async fn watch_task(name: String, config_path: PathBuf, delay_ms: u64) -> anyhow
     }
 
     Ok(())
+}
+
+use tracing_subscriber::{EnvFilter, fmt};
+
+pub fn init_logger() {
+    // 从 RUST_LOG 环境变量读取日志级别
+    // 默认 info，可设置 RUST_LOG=debug 查看详细日志
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    fmt().with_env_filter(filter).init();
 }

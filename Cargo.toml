@@ -16,9 +16,11 @@ clap = { version = "4.5.46", features = ["derive"] }
 anyhow = "1.0.99"
 serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.47.1", features = ["full"] }
-log = "0.4.27"
-env_logger = "0.11.8"
 toml = "0.9.5"
 notify = "8.1.0"
 tokio-util = { version = "0.7.16" }
 time = "0.3.41"
+tracing = "0.1.41"
+tracing-subscriber = { version = " 0.3.19", features = ["env-filter"] }
+thiserror = "2.0.16"
+walkdir = "2.5.0"
