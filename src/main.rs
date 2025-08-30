@@ -2,6 +2,7 @@ use clap::Parser;
 use syncbox::{cli, infra, sync};
 use tracing::info;
 
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     infra::logging::init_logger(); // 初始化日志

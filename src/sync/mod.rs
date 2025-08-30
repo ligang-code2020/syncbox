@@ -1,3 +1,4 @@
+use crate::infra::error::SyncError;
 use notify::{Event, EventKind, RecursiveMode, Watcher, recommended_watcher};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -66,60 +67,70 @@ mod scanner {
     pub fn scan_directory<P: AsRef<Path>>(
         root: P,
         exclude_patterns: &[String],
-    ) -> std::io::Result<Vec<FileInfo>> {
+    ) -> Result<Vec<FileInfo>, SyncError> {
         let mut files = Vec::new();
         let root = root.as_ref();
 
+        // 1. 检查目录是否存在
         if !root.exists() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Source directory not found: {}", root.display()),
-            ));
+            return Err(SyncError::SourceNotFound(root.to_path_buf()));
         }
 
-        let entries = match fs::read_dir(root) {
-            Ok(entries) => entries,
-            Err(e) => {
+        // 2. 读取目录
+        let entries = fs::read_dir(root).map_err(|e| {
+            debug!(
+                error = ?e,
+                path = %root.display(),
+                "Failed to read directory"
+            );
+            SyncError::IoError(e)
+        })?;
 
-                eprintln!("❌️  Cannot read directory '{}': {}", root.display(), e);
-
-                return Ok(files);
-            }
-        };
-
+        // 3. 遍历条目
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(e) => {
-                    eprintln!("⚠️  Cannot read entry in '{}': {}", root.display(), e);
+                    warn!(
+                        error = ?e,
+                        dir = %root.display(),
+                        "Failed to read directory entry"
+                    );
                     continue;
                 }
             };
 
             let path = entry.path();
 
-            // 👇 新增：检查是否应该排除
+            // 4. 检查是否排除
             if should_exclude(&path, root, exclude_patterns) {
-                debug!("Skipped (excluded): {}", path.display());
+                debug!(path = %path.display(), "Skipped (excluded)");
                 continue;
             }
 
             if path.is_dir() {
                 match scan_directory(&path, exclude_patterns) {
-                    Ok(mut sub_files) => files.append(&mut sub_files),
+                    Ok(files) => {
+                        info!(count = files.len(), "Scan completed");
+                    }
                     Err(e) => {
-                        eprintln!("⚠️  Cannot scan subdirectory '{}': {}", path.display(), e);
+                        return Err(e);
                     }
                 }
             } else {
                 match FileInfo::from_path(&path) {
                     Ok(info) => files.push(info),
                     Err(e) => {
-                        eprintln!("⚠️  Cannot read file '{}': {}", path.display(), e);
+                        warn!(
+                            error = ?e,
+                            path = %path.display(),
+                            "Failed to read file metadata"
+                        );
                     }
                 }
             }
         }
+
         Ok(files)
     }
 }
@@ -260,7 +271,7 @@ mod file_ops {
                 info.path
                     .strip_prefix(source)
                     .ok()
-                    .map(|rel| rel.to_string_lossy().to_string()) // ✅ 在这里转成 String
+                    .map(|rel| rel.to_string_lossy().to_string())
             })
             .collect();
 
@@ -279,11 +290,23 @@ mod file_ops {
         // 3. 执行删除
         for path in &to_delete {
             if dry_run {
-                println!("💡 Would delete: {}", path.display());
+                info!(
+                    path = %path.display(),
+                    action = "would_delete",
+                    "Dry run: would delete file"
+                );
             } else {
                 match tokio::fs::remove_file(path).await {
-                    Ok(()) => println!("🗑️  Deleted: {}", path.display()),
-                    Err(e) => eprintln!("❌ Failed to delete '{}': {}", path.display(), e),
+                    Ok(()) => info!(
+                        path = %path.display(),
+                        action = "deleted",
+                        "Deleted extra file"
+                    ),
+                    Err(e) => warn!(
+                        error = ?e,
+                        path = %path.display(),
+                        "Failed to delete extra file"
+                    ),
                 }
             }
         }
@@ -389,10 +412,16 @@ mod sync_logic {
         options: &SyncOptions,
     ) -> anyhow::Result<()> {
         // 1. 扫描源目录
-        let source_files = scan_directory(&source, &options.excludes)
-            .map_err(|e| anyhow::anyhow!("Failed to scan source: {}", e))?;
+        let source_files = scan_directory(source, &options.excludes)
+            .map_err(|e| anyhow::anyhow!("Failed to scan source directory -> {}", e))?;
 
-        println!("📊 Found {} files in source", source_files.len());
+        info!(
+            file_count = source_files.len(),
+            source = %source.display(),
+            target = %target.display(),
+            dry_run = options.dry_run,
+            "Starting sync"
+        );
 
         let mut copied = 0;
         let mut skipped = 0;
@@ -421,10 +450,19 @@ mod sync_logic {
                         if !options.dry_run {
                             copied += 1;
                         }
+                        debug!(
+                            source = %source_info.path.display(),
+                            target = %target_path.display(),
+                            "File copied"
+                        );
                     }
                     Err(e) => {
-                        // 👇 用户必须看到这个！
-                        eprintln!("❌ Failed to copy '{}': {}", source_info.path.display(), e);
+                        warn!(
+                            error = ?e,
+                            source = %source_info.path.display(),
+                            target = %target_path.display(),
+                            "Failed to copy file"
+                        );
                         failed_to_copy += 1;
                     }
                 }
@@ -433,23 +471,35 @@ mod sync_logic {
             }
         }
 
-        println!("✅ Sync complete!");
-        println!("   Copied: {}", copied);
-        println!("   Skipped (unchanged): {}", skipped);
-        if options.dry_run {
-            println!("   (Dry run mode)");
-        }
+        info!(
+            copied,
+            skipped,
+            failed = failed_to_copy,
+            dry_run = options.dry_run,
+            "Sync completed"
+        );
+
         if failed_to_copy > 0 {
-            eprintln!("❌ Failed to copy {} files.", failed_to_copy);
+            warn!(count = failed_to_copy, "Some files failed to copy");
+        }
+
+        if options.delete_extra {
+            if let Err(e) =
+                delete_extra_files(source, target, options.dry_run, &options.excludes).await
+            {
+                warn!(
+                    error = ?e,
+                    "Failed to delete extra files during sync"
+                );
+                // 可选：如果你想让 delete_extra 失败导致整体失败，可以：
+                // return Err(e.into());
+                // 但通常建议继续，只记录警告
+            }
         }
 
         // 如果有复制失败，我们也可以考虑返回错误（可选）
         if failed_to_copy > 0 {
             anyhow::bail!("Failed to copy {} files", failed_to_copy);
-        }
-
-        if options.delete_extra {
-            delete_extra_files(&source, &target, options.dry_run, &options.excludes).await?;
         }
 
         Ok(())
@@ -509,7 +559,7 @@ mod watcher {
                             }
                             _ => {
                                 // 其他事件（如 Metadata、Access、Other）不处理
-                                debug!("Ignored event: {:?}", event);
+                                debug!(event = ?event, "Ignored file system event");
                             }
                         }
                     }
@@ -581,15 +631,18 @@ mod watcher {
             // --- 防抖机制结束 ---
 
             // 7. 执行同步操作
-            println!("📁 Detected stable changes → syncing...");
+            info!("📁 Detected stable changes → syncing...");
             match sync_directories(&task.source, &task.target, &options).await {
                 Ok(()) => {
-                    println!("✅ Sync completed successfully");
+                    info!("✅ Sync completed successfully");
                 }
                 Err(e) => {
-                    eprintln!("❌ Sync failed: {}", e);
-                    // 注意：这里不返回错误，继续监听
-                    // 因为一次同步失败不应导致监听中断
+                    error!(
+                        error = ?e,
+                        source = %task.source.display(),
+                        target = %task.target.display(),
+                        "Sync failed during watch"
+                    );
                 }
             }
 
