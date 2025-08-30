@@ -220,7 +220,6 @@ mod filter {
 
 mod file_ops {
     use super::*;
-    use crate::sync;
     /// 复制文件（自动创建目标目录）
     ///
     /// # 参数
@@ -233,7 +232,7 @@ mod file_ops {
     ///
     /// # 注意
     /// 使用 `tokio::fs::copy`，保留元信息（如修改时间）。
-    pub fn copy_file(source: &Path, target: &Path, dry_run: bool) -> std::io::Result<()> {
+    pub async fn copy_file(source: &Path, target: &Path, dry_run: bool) -> std::io::Result<()> {
         if dry_run {
             println!("💡 Would copy: {} → {}", source.display(), target.display());
             return Ok(());
@@ -241,11 +240,11 @@ mod file_ops {
 
         // 创建目标目录
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
+            tokio::fs::create_dir_all(parent).await?;
         }
 
         // 执行复制
-        fs::copy(source, target)?;
+        tokio::fs::copy(source, target).await?;
         Ok(())
     }
 
@@ -446,7 +445,7 @@ mod sync_logic {
 
             // 判断是否需要同步
             if should_sync(source_info, target_info.as_ref()) {
-                match copy_file(&source_info.path, &target_path, options.dry_run) {
+                match copy_file(&source_info.path, &target_path, options.dry_run).await {
                     Ok(()) => {
                         if !options.dry_run {
                             copied += 1;
