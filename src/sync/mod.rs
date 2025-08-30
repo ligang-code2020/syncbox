@@ -110,8 +110,9 @@ mod scanner {
 
             if path.is_dir() {
                 match scan_directory(&path, exclude_patterns) {
-                    Ok(files) => {
-                        info!(count = files.len(), "Scan completed");
+                    Ok(mut sub_files) => {
+                        files.append(&mut sub_files);
+                        info!(count = sub_files.len(), "Scan completed for directory");
                     }
                     Err(e) => {
                         return Err(e);
