@@ -159,7 +159,7 @@ mod filter {
     /// todo - 将来可扩展为正则表达式
     pub fn should_exclude(path: &Path, root: &Path, exclude_patterns: &[String]) -> bool {
         // 我们需要将路径转换为“相对于 root 的路径”
-        // 比如：/Users/you/syncbox-test/src/a.tmp → a.tmp
+        // 比如：/Users/you/syncbox-tests/src/a.tmp → a.tmp
         let relative = match path.strip_prefix(root) {
             Ok(rel) => rel,
             Err(_) => return false, // 无法计算相对路径，不排除
