@@ -6,4 +6,6 @@ mod integration {
     mod target_not_writable; // 文件只读
 
     mod file_permission_denied; // 权限不足
+
+    mod source_not_found; // 源文件没有找到
 }
