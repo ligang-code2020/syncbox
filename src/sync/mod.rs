@@ -191,7 +191,15 @@ mod filter {
             }
         }
 
-        false
+        // 排除默认系统文件
+        if let Some(name) = relative.file_name().and_then(|s| s.to_str()) {
+            matches!(
+                name,
+                ".DS_Store" | ".fseventsd" | ".Trashes" | ".Spotlight-V100" | ".TemporaryItems"
+            ) || name.starts_with("._") // AppleDouble 文件
+        } else {
+            false
+        }
     }
 
     /// 比较源文件和目标文件，决定是否需要同步
