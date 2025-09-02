@@ -5,6 +5,6 @@ source = "/Users/lg/source"
 target = "/Users/lg/target"
 #exclude = [".log", ".DS_Store"]
 exclude = [".log"]
-delete_extra = true   # 默认安全：不删除
+
 
 

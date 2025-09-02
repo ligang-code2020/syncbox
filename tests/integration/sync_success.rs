@@ -24,7 +24,6 @@ async fn test_sync_success() {
         &target,
         &SyncOptions {
             dry_run: false,
-            delete_extra: false,
             excludes: vec![],
         },
     )

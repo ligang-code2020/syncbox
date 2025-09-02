@@ -26,7 +26,6 @@ async fn main() -> anyhow::Result<()> {
             let options = sync::SyncOptions {
                 dry_run,
                 excludes: vec![],
-                delete_extra: false,
             };
             sync::sync_directories(&source, &target, &options).await?;
         }
@@ -55,8 +54,7 @@ async fn main() -> anyhow::Result<()> {
 
             let options = sync::SyncOptions {
                 dry_run,
-                excludes: task.exclude.clone(),
-                delete_extra: task.delete_extra,
+                excludes: task.exclude.clone()
             };
 
             // 3. 执行同步

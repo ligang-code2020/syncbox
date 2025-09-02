@@ -17,7 +17,6 @@ async fn test_source_directory_not_found() {
         &target,
         &SyncOptions {
             dry_run: false,
-            delete_extra: false,
             excludes: vec![],
         },
     )

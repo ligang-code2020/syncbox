@@ -1,10 +1,12 @@
 use crate::infra::error::SyncError;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle,ProgressState};
 use notify::{Event, EventKind, RecursiveMode, Watcher, recommended_watcher};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::{debug, error, info, warn};
+use std::fmt::Write;
+
 
 // ==============================================
 // 公共类型定义（对外暴露）
@@ -42,7 +44,6 @@ impl FileInfo {
 #[derive(Debug, Default)]
 pub struct SyncReport {
     pub copied: Vec<PathBuf>,
-    pub deleted: Vec<PathBuf>,
     pub skipped: Vec<PathBuf>,
     pub errors: Vec<(PathBuf, String)>,
 }
@@ -256,121 +257,6 @@ mod file_ops {
         tokio::fs::copy(source, target).await?;
         Ok(())
     }
-
-    /// 删除文件（安全删除，记录错误）
-    ///
-    /// # 参数
-    /// - `path`: 要删除的文件路径
-    ///
-    /// # 注意
-    /// 不会 panic，错误会返回或记录日志。
-
-    pub async fn delete_extra_files(
-        source: &PathBuf,
-        target: &PathBuf,
-        dry_run: bool,
-        exclude: &[String],
-    ) -> anyhow::Result<()> {
-        use std::collections::HashSet;
-
-        // 1. 扫描源目录，收集所有文件的相对路径（String）
-        let source_files: HashSet<String> = scan_directory(source, exclude)?
-            .into_iter()
-            .filter_map(|info| {
-                info.path
-                    .strip_prefix(source)
-                    .ok()
-                    .map(|rel| rel.to_string_lossy().to_string())
-            })
-            .collect();
-
-        // 2. 递归遍历目标目录
-        let mut to_delete = Vec::new();
-        scan_target_for_deletion(
-            target,
-            target,
-            &source,
-            &source_files,
-            exclude,
-            &mut to_delete,
-        )
-        .await?;
-
-        // 3. 执行删除
-        for path in &to_delete {
-            if dry_run {
-                info!(
-                    path = %path.display(),
-                    action = "would_delete",
-                    "Dry run: would delete file"
-                );
-            } else {
-                match tokio::fs::remove_file(path).await {
-                    Ok(()) => info!(
-                        path = %path.display(),
-                        action = "deleted",
-                        "Deleted extra file"
-                    ),
-                    Err(e) => warn!(
-                        error = ?e,
-                        path = %path.display(),
-                        "Failed to delete extra file"
-                    ),
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// 递归扫描目标目录，找出需要删除的文件（源目录中没有）
-    ///
-    /// # 参数
-    /// - `source_files`: 源目录的文件列表
-    /// - `target_root`: 目标根目录
-    /// - `excludes`: 排除规则
-    ///
-    /// # 返回
-    /// - `Ok(Vec<PathBuf>)`: 可以安全删除的文件列表
-
-    pub(crate) async fn scan_target_for_deletion(
-        current: &PathBuf,
-        target_root: &PathBuf,
-        source_root: &PathBuf,
-        source_files: &std::collections::HashSet<String>,
-        exclude: &[String],
-        to_delete: &mut Vec<PathBuf>,
-    ) -> std::io::Result<()> {
-        let mut dir = tokio::fs::read_dir(current).await?;
-
-        while let Some(entry) = dir.next_entry().await? {
-            let path = entry.path();
-
-            if path.is_dir() {
-                // ✅ 使用 Box::pin 包装递归调用，引入间接层
-                let future = scan_target_for_deletion(
-                    &path,
-                    target_root,
-                    source_root,
-                    source_files,
-                    exclude,
-                    to_delete,
-                );
-                Box::pin(future).await?;
-            } else {
-                if let Ok(rel_path) = path.strip_prefix(target_root) {
-                    let rel_str = rel_path.to_string_lossy().to_string();
-                    if !source_files.contains(&rel_str)
-                        && !should_exclude(&path, source_root, exclude)
-                    {
-                        to_delete.push(path);
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
 }
 
 // ==============================================
@@ -383,7 +269,6 @@ mod sync_logic {
     pub struct SyncOptions {
         pub dry_run: bool,
         pub excludes: Vec<String>,
-        pub delete_extra: bool,
     }
 
     impl Default for SyncOptions {
@@ -391,7 +276,6 @@ mod sync_logic {
             Self {
                 dry_run: false,
                 excludes: vec![],
-                delete_extra: false,
             }
         }
     }
@@ -409,7 +293,6 @@ mod sync_logic {
     /// - `target`: 目标目录
     /// - `dry_run`: 是否为试运行（不实际修改文件）
     /// - `excludes`: 排除规则
-    /// - `delete_extra`: 是否删除目标目录中多余的文件
     ///
     /// # 返回
     /// - `Ok(SyncReport)`: 同步结果报告
@@ -447,12 +330,18 @@ mod sync_logic {
             }
         }
 
-        // 3. 初始化进度条（基于待同步文件总大小）
+        // 检查是否有需要同步的文件
+        if sync_queue.is_empty() {
+            // 没有文件需要同步，直接提示并返回
+            info!("✅无需同步，已经是最新的了");
+            return Ok(());
+        }
+
+        // 初始化进度条（基于待同步文件总大小）
         let pb = ProgressBar::new(total_sync_size);
-        pb.set_style(ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")?
+        pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:50.cyan/blue}] {bytes}/{total_bytes} ({eta})")?
+            .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
             .progress_chars("#>-"));
-        pb.set_message("Syncing files...");
 
         // 4. 处理同步队列
         let mut copied = 0;
@@ -503,27 +392,8 @@ mod sync_logic {
 
         if failed_to_copy > 0 {
             warn!(count = failed_to_copy, "Some files failed to copy");
-        }
-
-        if options.delete_extra {
-            if let Err(e) =
-                delete_extra_files(source, target, options.dry_run, &options.excludes).await
-            {
-                warn!(
-                    error = ?e,
-                    "Failed to delete extra files during sync"
-                );
-                // 可选：如果你想让 delete_extra 失败导致整体失败，可以：
-                // return Err(e.into());
-                // 但通常建议继续，只记录警告
-            }
-        }
-
-        // 如果有复制失败，我们也可以考虑返回错误（可选）
-        if failed_to_copy > 0 {
             anyhow::bail!("Failed to copy {} files", failed_to_copy);
         }
-
         Ok(())
     }
 }
@@ -551,7 +421,6 @@ mod watcher {
         let options = SyncOptions {
             dry_run: false, // watch 模式通常不是 dry_run
             excludes: task.exclude.clone(),
-            delete_extra: task.delete_extra,
         };
 
         // 3. 创建一个异步 channel，用于从文件监听线程向主异步循环传递事件
@@ -571,10 +440,10 @@ mod watcher {
             recommended_watcher(move |res: std::result::Result<Event, notify::Error>| {
                 match res {
                     Ok(event) => {
-                        // 只关心三类事件：修改、创建、删除
+                        // 只关心三类事件：修改、创建
                         // 忽略元数据变更（如访问时间）、重命名等，避免过度触发
                         match event.kind {
-                            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
+                            EventKind::Modify(_) | EventKind::Create(_) => {
                                 // 将事件发送到 channel
                                 // 如果接收端已关闭（如程序退出），则忽略错误
                                 let _ = tx.send(event);
@@ -679,7 +548,7 @@ mod watcher {
 // 公共接口导出（供 main.rs 调用）
 // ==============================================
 
-pub use file_ops::{copy_file, delete_extra_files};
+pub use file_ops::copy_file;
 pub use filter::{should_exclude, should_sync};
 pub use scanner::scan_directory;
 pub use sync_logic::{SyncOptions, sync_directories};
