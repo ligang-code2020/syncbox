@@ -1,4 +1,5 @@
 use crate::infra::error::SyncError;
+use indicatif::{ProgressBar, ProgressStyle};
 use notify::{Event, EventKind, RecursiveMode, Watcher, recommended_watcher};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -419,67 +420,80 @@ mod sync_logic {
         target: &PathBuf,
         options: &SyncOptions,
     ) -> anyhow::Result<()> {
-        // 1. 扫描源目录
+        // 1. 扫描源目录获取所有文件
         let source_files = scan_directory(source, &options.excludes)
             .map_err(|e| anyhow::anyhow!("Failed to scan source directory -> {}", e))?;
 
-        info!(
-            file_count = source_files.len(),
-            source = %source.display(),
-            target = %target.display(),
-            dry_run = options.dry_run,
-            "Starting sync"
-        );
+        // 2. 预扫描：筛选出需要同步的文件，并计算总大小
+        let mut sync_queue = Vec::new();
+        let mut total_sync_size: u64 = 0;
 
-        let mut copied = 0;
-        let mut skipped = 0;
-        let mut failed_to_copy = 0;
-
-        // 2. 遍历每个源文件
         for source_info in &source_files {
-            // 计算目标路径：/src/a/b.txt → /dst/a/b.txt
             let relative = source_info
                 .path
-                .strip_prefix(&source)
+                .strip_prefix(source)
                 .expect("File not under source root");
             let target_path = target.join(relative);
-
-            // 获取目标文件信息（如果存在）
             let target_info = if target_path.exists() {
                 FileInfo::from_path(&target_path).ok()
             } else {
                 None
             };
 
-            // 判断是否需要同步
+            // 判断是否需要同步，只将需要同步的文件加入队列
             if should_sync(source_info, target_info.as_ref()) {
-                match copy_file(&source_info.path, &target_path, options.dry_run).await {
-                    Ok(()) => {
-                        if !options.dry_run {
-                            copied += 1;
-                        }
-                        debug!(
-                            source = %source_info.path.display(),
-                            target = %target_path.display(),
-                            "File copied"
-                        );
-                    }
-                    Err(e) => {
-                        warn!(
-                            error = ?e,
-                            source = %source_info.path.display(),
-                            target = %target_path.display(),
-                            "Failed to copy file"
-                        );
-                        failed_to_copy += 1;
-                    }
-                }
-            } else {
-                skipped += 1;
+                sync_queue.push((source_info.clone(), target_path));
+                total_sync_size += source_info.size;
             }
         }
 
+        // 3. 初始化进度条（基于待同步文件总大小）
+        let pb = ProgressBar::new(total_sync_size);
+        pb.set_style(ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")?
+            .progress_chars("#>-"));
+        pb.set_message("Syncing files...");
+
+        // 4. 处理同步队列
+        let mut copied = 0;
+        let mut failed_to_copy = 0;
+        let mut processed_size = 0;
+
+        for (source_info, target_path) in &sync_queue {
+            match copy_file(&source_info.path, &target_path, options.dry_run).await {
+                Ok(()) => {
+                    if !options.dry_run {
+                        copied += 1;
+                    }
+                    processed_size += source_info.size;
+                    pb.set_position(processed_size); // 只更新待同步文件的进度
+                    debug!(
+                        source = %source_info.path.display(),
+                        target = %target_path.display(),
+                        "File copied"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        error = ?e,
+                        source = %source_info.path.display(),
+                        target = %target_path.display(),
+                        "Failed to copy file"
+                    );
+                    failed_to_copy += 1;
+                    processed_size += source_info.size; // 失败也计入进度（已处理）
+                    pb.set_position(processed_size);
+                }
+            }
+        }
+
+        pb.finish_with_message("File sync completed");
+
+        // 5. 统计信息（跳过的文件=总文件数-待同步文件数）
+        let skipped = source_files.len() - sync_queue.len();
         info!(
+            total = source_files.len(),
+            to_sync = sync_queue.len(),
             copied,
             skipped,
             failed = failed_to_copy,
