@@ -1,12 +1,11 @@
 use crate::infra::error::SyncError;
-use indicatif::{ProgressBar, ProgressStyle,ProgressState};
+use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use notify::{Event, EventKind, RecursiveMode, Watcher, recommended_watcher};
+use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::{debug, error, info, warn};
-use std::fmt::Write;
-
 
 // ==============================================
 // 公共类型定义（对外暴露）
@@ -244,7 +243,6 @@ mod file_ops {
     /// 使用 `tokio::fs::copy`，保留元信息（如修改时间）。
     pub async fn copy_file(source: &Path, target: &Path, dry_run: bool) -> std::io::Result<()> {
         if dry_run {
-            println!("💡 Would copy: {} → {}", source.display(), target.display());
             return Ok(());
         }
 
@@ -337,53 +335,72 @@ mod sync_logic {
             return Ok(());
         }
 
-        // 初始化进度条（基于待同步文件总大小）
-        let pb = ProgressBar::new(total_sync_size);
-        pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:50.cyan/blue}] {bytes}/{total_bytes} ({eta})")?
-            .with_key("eta", |state: &ProgressState, w: &mut dyn Write| write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap())
-            .progress_chars("#>-"));
-
         // 4. 处理同步队列
         let mut copied = 0;
         let mut failed_to_copy = 0;
         let mut processed_size = 0;
 
-        for (source_info, target_path) in &sync_queue {
-            match copy_file(&source_info.path, &target_path, options.dry_run).await {
-                Ok(()) => {
-                    if !options.dry_run {
+        if options.dry_run {
+            // Dry-run 模式：列出所有将被同步的文件
+            info!("📋 Dry run mode - files to be synchronized:");
+            for (source_info, target_path) in &sync_queue {
+                info!(
+                    "→ {} → {}",
+                    source_info.path.display(),
+                    target_path.display()
+                );
+            }
+        } else {
+            // 正常模式：初始化进度条
+            let pb = ProgressBar::new(total_sync_size);
+            pb.set_style(ProgressStyle::with_template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:50.cyan/blue}] {bytes}/{total_bytes} ({eta})"
+            )?
+                .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
+                    write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                })
+                .progress_chars("#>-"));
+
+            // // 4. 处理同步队列并更新进度
+            // let mut copied = 0;
+            // let mut failed_to_copy = 0;
+            // let mut processed_size = 0;
+
+            for (source_info, target_path) in &sync_queue {
+                match copy_file(&source_info.path, &target_path, options.dry_run).await {
+                    Ok(()) => {
                         copied += 1;
+                        processed_size += source_info.size;
+                        pb.set_position(processed_size);
+                        debug!(
+                            source = %source_info.path.display(),
+                            target = %target_path.display(),
+                            "File copied"
+                        );
                     }
-                    processed_size += source_info.size;
-                    pb.set_position(processed_size); // 只更新待同步文件的进度
-                    debug!(
-                        source = %source_info.path.display(),
-                        target = %target_path.display(),
-                        "File copied"
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        error = ?e,
-                        source = %source_info.path.display(),
-                        target = %target_path.display(),
-                        "Failed to copy file"
-                    );
-                    failed_to_copy += 1;
-                    processed_size += source_info.size; // 失败也计入进度（已处理）
-                    pb.set_position(processed_size);
+                    Err(e) => {
+                        warn!(
+                            error = ?e,
+                            source = %source_info.path.display(),
+                            target = %target_path.display(),
+                            "Failed to copy file"
+                        );
+                        failed_to_copy += 1;
+                        processed_size += source_info.size;
+                        pb.set_position(processed_size);
+                    }
                 }
             }
-        }
 
-        pb.finish_with_message("File sync completed");
+            pb.finish_with_message("File sync completed");
+        }
 
         // 5. 统计信息（跳过的文件=总文件数-待同步文件数）
         let skipped = source_files.len() - sync_queue.len();
         info!(
             total = source_files.len(),
             to_sync = sync_queue.len(),
-            copied,
+            copied = if options.dry_run { 0 } else { copied },
             skipped,
             failed = failed_to_copy,
             dry_run = options.dry_run,
