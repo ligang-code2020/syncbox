@@ -23,6 +23,9 @@ pub enum Command {
         /// Perform a dry run without making changes
         #[arg(long)]
         dry_run: bool,
+
+        #[arg(long)]
+        checksum: bool,
     },
     Run {
         /// Name of the task to run (from config)
@@ -35,6 +38,9 @@ pub enum Command {
         /// Perform a dry run
         #[arg(long)]
         dry_run: bool,
+
+        #[arg(long)]
+        checksum: bool,
     },
 
     Watch {
@@ -48,5 +54,8 @@ pub enum Command {
         /// Watch delay in milliseconds (default: 500ms)
         #[arg(long, default_value = "500")]
         delay: u64,
+
+        #[arg(long)]
+        checksum: bool,
     },
 }

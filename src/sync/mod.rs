@@ -20,23 +20,38 @@ pub struct FileInfo {
     pub mtime: SystemTime,
     // 文件大小
     pub size: u64,
+    // 存储 BLAKE3 哈希值
+    pub blake3_hash: Option<[u8; 32]>,
 }
 
 impl FileInfo {
     /// 从路径创建 FileInfo
-    pub fn from_path(path: &Path) -> std::io::Result<Self> {
+    pub fn from_path(path: &Path, compute_hash: bool) -> std::io::Result<Self> {
         let metadata = fs::metadata(path)?;
+        let blake3_hash = if compute_hash && metadata.is_file() {
+            Some(compute_blake3_hash(path)?)
+        } else {
+            None
+        };
         Ok(FileInfo {
             path: path.to_path_buf(),
             mtime: metadata.modified()?,
             size: metadata.len(),
+            blake3_hash,
         })
     }
 
-    /// 比较两个文件，source 是否比 target 新
+    /// 默认策略：比较两个文件的修改时间和大小
     pub fn is_newer_than(&self, target: &Self) -> bool {
-        self.mtime > target.mtime
+        self.mtime > target.mtime || self.size != target.size
     }
+
+    /// 增强策略：比较两个文件是否内容相同（用于哈希模式）
+    pub fn content_eq(&self, other: &Self) -> bool {
+        self.size == other.size && self.blake3_hash == other.blake3_hash
+    }
+
+
 }
 
 /// 同步操作的结果报告
@@ -68,6 +83,7 @@ mod scanner {
     pub fn scan_directory<P: AsRef<Path>>(
         root: P,
         exclude_patterns: &[String],
+        compute_hash: bool,
     ) -> Result<Vec<FileInfo>, SyncError> {
         let mut files = Vec::new();
         let root = root.as_ref();
@@ -110,7 +126,7 @@ mod scanner {
             }
 
             if path.is_dir() {
-                match scan_directory(&path, exclude_patterns) {
+                match scan_directory(&path, exclude_patterns, compute_hash) {
                     Ok(mut sub_files) => {
                         files.append(&mut sub_files);
                         info!(count = sub_files.len(), "Scan completed for directory");
@@ -120,7 +136,7 @@ mod scanner {
                     }
                 }
             } else {
-                match FileInfo::from_path(&path) {
+                match FileInfo::from_path(&path, compute_hash) {
                     Ok(info) => files.push(info),
                     Err(e) => {
                         warn!(
@@ -214,10 +230,22 @@ mod filter {
     /// - `true`: 需要同步
     /// - `false`: 无需同步
 
-    pub fn should_sync(source_info: &FileInfo, target_info: Option<&FileInfo>) -> bool {
+    pub fn should_sync(
+        source_info: &FileInfo,
+        target_info: Option<&FileInfo>,
+        checksum: bool,
+    ) -> bool {
         match target_info {
             None => true, // 目标不存在，需要同步
-            Some(target) => source_info.is_newer_than(target),
+            Some(target) => {
+                if checksum {
+                    // 哈希模式：比较大小和哈希值
+                    !source_info.content_eq(target)
+                } else {
+                    // 默认模式：比较 mtime 和 size
+                    source_info.is_newer_than(target)
+                }
+            }
         }
     }
 }
@@ -255,6 +283,13 @@ mod file_ops {
         tokio::fs::copy(source, target).await?;
         Ok(())
     }
+
+    pub fn compute_blake3_hash(path: &Path) -> std::io::Result<[u8; 32]> {
+        let mut file = fs::File::open(path)?;
+        let mut hasher = blake3::Hasher::new();
+        std::io::copy(&mut file, &mut hasher)?;
+        Ok(hasher.finalize().into())
+    }
 }
 
 // ==============================================
@@ -267,6 +302,7 @@ mod sync_logic {
     pub struct SyncOptions {
         pub dry_run: bool,
         pub excludes: Vec<String>,
+        pub checksum: bool,
     }
 
     impl Default for SyncOptions {
@@ -274,6 +310,7 @@ mod sync_logic {
             Self {
                 dry_run: false,
                 excludes: vec![],
+                checksum: false,
             }
         }
     }
@@ -302,7 +339,7 @@ mod sync_logic {
         options: &SyncOptions,
     ) -> anyhow::Result<()> {
         // 1. 扫描源目录获取所有文件
-        let source_files = scan_directory(source, &options.excludes)
+        let source_files = scan_directory(source, &options.excludes, options.checksum)
             .map_err(|e| anyhow::anyhow!("Failed to scan source directory -> {}", e))?;
 
         // 2. 预扫描：筛选出需要同步的文件，并计算总大小
@@ -316,13 +353,13 @@ mod sync_logic {
                 .expect("File not under source root");
             let target_path = target.join(relative);
             let target_info = if target_path.exists() {
-                FileInfo::from_path(&target_path).ok()
+                FileInfo::from_path(&target_path, options.checksum).ok()
             } else {
                 None
             };
 
             // 判断是否需要同步，只将需要同步的文件加入队列
-            if should_sync(source_info, target_info.as_ref()) {
+            if should_sync(source_info, target_info.as_ref(),options.checksum) {
                 sync_queue.push((source_info.clone(), target_path));
                 total_sync_size += source_info.size;
             }
@@ -361,10 +398,6 @@ mod sync_logic {
                 })
                 .progress_chars("#>-"));
 
-            // // 4. 处理同步队列并更新进度
-            // let mut copied = 0;
-            // let mut failed_to_copy = 0;
-            // let mut processed_size = 0;
 
             for (source_info, target_path) in &sync_queue {
                 match copy_file(&source_info.path, &target_path, options.dry_run).await {
@@ -438,6 +471,7 @@ mod watcher {
         let options = SyncOptions {
             dry_run: false, // watch 模式通常不是 dry_run
             excludes: task.exclude.clone(),
+            checksum: false,
         };
 
         // 3. 创建一个异步 channel，用于从文件监听线程向主异步循环传递事件
@@ -570,3 +604,4 @@ pub use filter::{should_exclude, should_sync};
 pub use scanner::scan_directory;
 pub use sync_logic::{SyncOptions, sync_directories};
 pub use watcher::watch_task;
+use crate::sync::file_ops::compute_blake3_hash;

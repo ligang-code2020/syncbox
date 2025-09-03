@@ -1,7 +1,7 @@
 use std::path::Path;
-use tempfile::TempDir;
 use syncbox::sync::SyncOptions;
 use syncbox::sync::sync_directories;
+use tempfile::TempDir;
 
 #[tokio::test]
 async fn test_source_directory_not_found() {
@@ -18,6 +18,7 @@ async fn test_source_directory_not_found() {
         &SyncOptions {
             dry_run: false,
             excludes: vec![],
+            checksum: false,
         },
     )
     .await;

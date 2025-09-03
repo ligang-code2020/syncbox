@@ -29,6 +29,7 @@ async fn test_target_directory_not_writable() {
         &SyncOptions {
             dry_run: false,
             excludes: vec![],
+            checksum: true,
         },
     )
     .await;
