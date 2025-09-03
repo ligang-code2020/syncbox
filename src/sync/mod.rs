@@ -50,8 +50,6 @@ impl FileInfo {
     pub fn content_eq(&self, other: &Self) -> bool {
         self.size == other.size && self.blake3_hash == other.blake3_hash
     }
-
-
 }
 
 /// 同步操作的结果报告
@@ -342,6 +340,8 @@ mod sync_logic {
         let source_files = scan_directory(source, &options.excludes, options.checksum)
             .map_err(|e| anyhow::anyhow!("Failed to scan source directory -> {}", e))?;
 
+
+
         // 2. 预扫描：筛选出需要同步的文件，并计算总大小
         let mut sync_queue = Vec::new();
         let mut total_sync_size: u64 = 0;
@@ -359,7 +359,7 @@ mod sync_logic {
             };
 
             // 判断是否需要同步，只将需要同步的文件加入队列
-            if should_sync(source_info, target_info.as_ref(),options.checksum) {
+            if should_sync(source_info, target_info.as_ref(), options.checksum) {
                 sync_queue.push((source_info.clone(), target_path));
                 total_sync_size += source_info.size;
             }
@@ -368,7 +368,7 @@ mod sync_logic {
         // 检查是否有需要同步的文件
         if sync_queue.is_empty() {
             // 没有文件需要同步，直接提示并返回
-            info!("✅无需同步，已经是最新的了");
+            debug!("✅无需同步，已经是最新的了");
             return Ok(());
         }
 
@@ -397,7 +397,6 @@ mod sync_logic {
                     write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
                 })
                 .progress_chars("#>-"));
-
 
             for (source_info, target_path) in &sync_queue {
                 match copy_file(&source_info.path, &target_path, options.dry_run).await {
@@ -491,23 +490,33 @@ mod watcher {
             recommended_watcher(move |res: std::result::Result<Event, notify::Error>| {
                 match res {
                     Ok(event) => {
-                        // 只关心三类事件：修改、创建
+                        // 只关心二类事件：修改、创建
                         // 忽略元数据变更（如访问时间）、重命名等，避免过度触发
                         match event.kind {
-                            EventKind::Modify(_) | EventKind::Create(_) => {
-                                // 将事件发送到 channel
-                                // 如果接收端已关闭（如程序退出），则忽略错误
+                            // 只处理文件内容修改和创建事件
+                            EventKind::Create(_) => {
                                 let _ = tx.send(event);
                             }
+                            EventKind::Modify(modify_kind) => {
+                                // 仅处理文件内容数据修改，忽略元数据、权限等变更
+                                if matches!(modify_kind, notify::event::ModifyKind::Data(_)) {
+                                    let _ = tx.send(event);
+                                } else {
+                                    debug!(event = ?event, "Ignored non-data modify event");
+                                }
+                            }
+                            // 明确忽略删除相关事件（包括可能的元数据变更）
+                            EventKind::Remove(_) => {
+                                debug!(event = ?event, "Ignored file removal event");
+                            }
                             _ => {
-                                // 其他事件（如 Metadata、Access、Other）不处理
                                 debug!(event = ?event, "Ignored file system event");
                             }
                         }
                     }
                     Err(error) => {
                         // 监听过程中发生错误（如权限不足、路径不存在）
-                        eprintln!("📁 File watch error: {}", error);
+                        error!("📁 File watch error: {}", error)
                     }
                 }
             })
@@ -541,7 +550,7 @@ mod watcher {
                 break; // channel 被关闭，退出循环（通常是程序终止）
             }
 
-            info!(
+            debug!(
                 "Change detected, starting debounce period of {}ms...",
                 delay_ms
             );
@@ -565,7 +574,7 @@ mod watcher {
                     Err(_) => {
                         // timeout 超时！说明在 delay_ms 毫秒内没有新事件
                         // 👉 这正是我们想要的：用户已经“停止”修改文件
-                        info!("Debounce period ended with no further changes.");
+                        debug!("Debounce period ended with no further changes.");
                         break; // 跳出内层循环，准备执行同步
                     }
                 }
@@ -573,10 +582,10 @@ mod watcher {
             // --- 防抖机制结束 ---
 
             // 7. 执行同步操作
-            info!("📁 Detected stable changes → syncing...");
+            debug!("📁 Detected stable changes → syncing...");
             match sync_directories(&task.source, &task.target, &options).await {
                 Ok(()) => {
-                    info!("✅ Sync completed successfully");
+                    debug!("✅ Sync completed successfully");
                 }
                 Err(e) => {
                     error!(
@@ -599,9 +608,9 @@ mod watcher {
 // 公共接口导出（供 main.rs 调用）
 // ==============================================
 
+use crate::sync::file_ops::compute_blake3_hash;
 pub use file_ops::copy_file;
 pub use filter::{should_exclude, should_sync};
 pub use scanner::scan_directory;
 pub use sync_logic::{SyncOptions, sync_directories};
 pub use watcher::watch_task;
-use crate::sync::file_ops::compute_blake3_hash;
