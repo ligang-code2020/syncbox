@@ -127,7 +127,6 @@ mod scanner {
                 match scan_directory(&path, exclude_patterns, compute_hash) {
                     Ok(mut sub_files) => {
                         files.append(&mut sub_files);
-                        info!(count = sub_files.len(), "Scan completed for directory");
                     }
                     Err(e) => {
                         return Err(e);
