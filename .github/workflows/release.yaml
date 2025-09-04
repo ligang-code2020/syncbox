@@ -1,36 +1,38 @@
-name: Build Release
+name: Build and Release
 
-# 1. 全局权限声明（最高优先级）
+# 核心：使用标签触发（绕过Release权限限制）+ 完整权限声明
 permissions:
-  contents: write  # 允许读写内容（包括 Release 资产）
-  packages: write  # 额外添加，避免潜在权限问题
-  actions: read    # 读取其他工作流状态（可选）
+  contents: write  # 允许创建Release和上传资产
+  packages: write  # 额外权限，防止遗漏
 
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - 'v*.*.*'  # 匹配v1.0.0这样的版本标签
 
 jobs:
   build:
-    name: Build for ${{ matrix.os }}
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    # 2. 单任务权限（覆盖全局，再次强调）
-    permissions:
-      contents: write
     strategy:
-      fail-fast: false  # 确保一个平台失败不影响其他
+      fail-fast: false  # 单个平台失败不影响其他
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        include:  # 补充平台对应的二进制文件名和压缩方式
+        include:
+          # Linux x86_64
           - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             binary: syncbox
-            archive: syncbox-linux.tar.gz
+            archive: syncbox-linux-x86_64.tar.gz
+          # macOS x86_64
           - os: macos-latest
+            target: x86_64-apple-darwin
             binary: syncbox
-            archive: syncbox-macos.tar.gz
+            archive: syncbox-macos-x86_64.tar.gz
+          # Windows x86_64
           - os: windows-latest
+            target: x86_64-pc-windows-msvc
             binary: syncbox.exe
-            archive: syncbox-windows.zip
+            archive: syncbox-windows-x86_64.zip
 
     steps:
       - name: Checkout code
@@ -38,23 +40,41 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          target: ${{ matrix.target }}  # 显式指定目标平台
 
       - name: Build release
-        run: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Locate binary
+        id: binary-path
+        run: |
+          # 定位编译后的二进制文件路径
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            echo "path=target/${{ matrix.target }}/release/${{ matrix.binary }}" >> $GITHUB_OUTPUT
+          else
+            echo "path=target/${{ matrix.target }}/release/${{ matrix.binary }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Package artifact
         run: |
+          # 根据平台打包
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            powershell -Command "Compress-Archive -Path ./target/release/${{ matrix.binary }} -DestinationPath ${{ matrix.archive }} -Force"
+            powershell -Command "Compress-Archive -Path ${{ steps.binary-path.outputs.path }} -DestinationPath ${{ matrix.archive }} -Force"
           else
-            tar -czf ${{ matrix.archive }} -C ./target/release ${{ matrix.binary }}
+            tar -czf ${{ matrix.archive }} -C $(dirname ${{ steps.binary-path.outputs.path }}) $(basename ${{ steps.binary-path.outputs.path }})
           fi
-        shell: bash
 
       - name: Upload to Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2  # 使用最新版action
         with:
           files: ${{ matrix.archive }}
-          overwrite: true
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## ${{ github.ref_name }}
+            自动构建的预编译二进制文件
+            - Linux: syncbox-linux-x86_64.tar.gz
+            - macOS: syncbox-macos-x86_64.tar.gz
+            - Windows: syncbox-windows-x86_64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
