@@ -16,6 +16,7 @@ async fn main() -> anyhow::Result<()> {
             source,
             target,
             dry_run,
+            checksum,
         } => {
             info!(
                 "Sync: copying file {} → {}",
@@ -26,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
             let options = sync::SyncOptions {
                 dry_run,
                 excludes: vec![],
-                delete_extra: false,
+                checksum, // 新增
             };
             sync::sync_directories(&source, &target, &options).await?;
         }
@@ -35,6 +36,7 @@ async fn main() -> anyhow::Result<()> {
             name,
             config,
             dry_run,
+            checksum, // 新增
         } => {
             info!("Running task: {}", name);
 
@@ -56,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
             let options = sync::SyncOptions {
                 dry_run,
                 excludes: task.exclude.clone(),
-                delete_extra: task.delete_extra,
+                checksum, // 新增
             };
 
             // 3. 执行同步
@@ -66,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
         cli::Command::Watch {
             name,
             config,
-            delay,
+            delay, ..
         } => {
             info!("Watching task: {}", name);
 
