@@ -21,7 +21,7 @@ jobs:
       fail-fast: false  # 确保一个平台失败不影响其他
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        include:
+        include:  # 补充平台对应的二进制文件名和压缩方式
           - os: ubuntu-latest
             binary: syncbox
             archive: syncbox-linux.tar.gz
