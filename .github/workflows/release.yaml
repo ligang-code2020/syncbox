@@ -1,59 +1,60 @@
 name: Build Release
 
-# 关键：添加权限声明，解决 Resource not accessible 问题
+# 1. 全局权限声明（最高优先级）
 permissions:
-  contents: write  # 允许读写仓库内容（包括上传 Release 资产）
+  contents: write  # 允许读写内容（包括 Release 资产）
+  packages: write  # 额外添加，避免潜在权限问题
+  actions: read    # 读取其他工作流状态（可选）
 
 on:
   release:
-    types: [created]  # 当创建新 Release 时触发
+    types: [created]
 
 jobs:
   build:
     name: Build for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # 2. 单任务权限（覆盖全局，再次强调）
+    permissions:
+      contents: write
     strategy:
-      # 关键：关闭 "一个平台失败则全部取消"，方便定位单个平台问题
-      fail-fast: false
+      fail-fast: false  # 确保一个平台失败不影响其他
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        include:
+        include:  # 补充平台对应的二进制文件名和压缩方式
           - os: ubuntu-latest
-            binary: syncbox          # Linux 二进制文件名
-            archive: syncbox-linux.tar.gz  # 最终压缩包名
+            binary: syncbox
+            archive: syncbox-linux.tar.gz
           - os: macos-latest
             binary: syncbox
             archive: syncbox-macos.tar.gz
           - os: windows-latest
-            binary: syncbox.exe      # Windows 二进制带 .exe 后缀
+            binary: syncbox.exe
             archive: syncbox-windows.zip
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4  # 拉取代码，权限足够
+        uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable  # 安装 Rust，无需额外权限
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Build release version
-        run: cargo build --release  # 编译 Release 版本（无锁文件问题）
+      - name: Build release
+        run: cargo build --release
 
-      - name: Package binary into archive
-        # 根据平台选择压缩方式（Windows 用 PowerShell，Linux/macOS 用 tar）
+      - name: Package artifact
         run: |
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            # Windows：用 PowerShell 压缩（避免依赖外部工具）
             powershell -Command "Compress-Archive -Path ./target/release/${{ matrix.binary }} -DestinationPath ${{ matrix.archive }} -Force"
           else
-            # Linux/macOS：用 tar 压缩（只打包二进制文件，体积小）
             tar -czf ${{ matrix.archive }} -C ./target/release ${{ matrix.binary }}
           fi
-        shell: bash  # 统一用 bash 解释器，避免语法差异
+        shell: bash
 
-      - name: Upload archive to Release
-        uses: softprops/action-gh-release@v1  # 稳定的第三方上传工具
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 现在有权限 write contents
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
         with:
-          files: ./${{ matrix.archive }}  # 上传当前平台的压缩包
-          overwrite: true  # 允许覆盖同名文件（更新 Release 时有用）
+          files: ${{ matrix.archive }}
+          overwrite: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
