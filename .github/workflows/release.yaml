@@ -1,5 +1,9 @@
 name: Build Release
 
+# 关键：添加权限声明，解决 Resource not accessible 问题
+permissions:
+  contents: write  # 允许读写仓库内容（包括上传 Release 资产）
+
 on:
   release:
     types: [created]  # 当创建新 Release 时触发
@@ -9,47 +13,47 @@ jobs:
     name: Build for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
+      # 关键：关闭 "一个平台失败则全部取消"，方便定位单个平台问题
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        include:  # 补充平台对应的二进制文件名和压缩方式
+        include:
           - os: ubuntu-latest
-            binary-name: syncbox
-            archive-format: tar.gz
+            binary: syncbox          # Linux 二进制文件名
+            archive: syncbox-linux.tar.gz  # 最终压缩包名
           - os: macos-latest
-            binary-name: syncbox
-            archive-format: tar.gz
+            binary: syncbox
+            archive: syncbox-macos.tar.gz
           - os: windows-latest
-            binary-name: syncbox.exe
-            archive-format: zip
+            binary: syncbox.exe      # Windows 二进制带 .exe 后缀
+            archive: syncbox-windows.zip
 
     steps:
-      - uses: actions/checkout@v4  # 拉取代码
+      - name: Checkout code
+        uses: actions/checkout@v4  # 拉取代码，权限足够
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable  # 安装稳定版 Rust
+        uses: dtolnay/rust-toolchain@stable  # 安装 Rust，无需额外权限
 
-      - name: Build Release
-        run: cargo build --release  # 编译（去掉 --locked，避免锁文件问题）
+      - name: Build release version
+        run: cargo build --release  # 编译 Release 版本（无锁文件问题）
 
-      - name: Prepare Artifact
-        id: prep
+      - name: Package binary into archive
+        # 根据平台选择压缩方式（Windows 用 PowerShell，Linux/macOS 用 tar）
         run: |
-          # 根据平台生成压缩包
-          if [ "${{ matrix.archive-format }}" = "tar.gz" ]; then
-            # Linux/macOS 用 tar 压缩
-            ARCHIVE_NAME="syncbox-${{ matrix.os }}.tar.gz"
-            tar -czf "$ARCHIVE_NAME" -C ./target/release "${{ matrix.binary-name }}"
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            # Windows：用 PowerShell 压缩（避免依赖外部工具）
+            powershell -Command "Compress-Archive -Path ./target/release/${{ matrix.binary }} -DestinationPath ${{ matrix.archive }} -Force"
           else
-            # Windows 用 PowerShell 压缩（避免依赖 7z）
-            ARCHIVE_NAME="syncbox-windows.zip"
-            powershell -Command "Compress-Archive -Path ./target/release/${{ matrix.binary-name }} -DestinationPath $ARCHIVE_NAME"
+            # Linux/macOS：用 tar 压缩（只打包二进制文件，体积小）
+            tar -czf ${{ matrix.archive }} -C ./target/release ${{ matrix.binary }}
           fi
-          echo "archive-name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
+        shell: bash  # 统一用 bash 解释器，避免语法差异
 
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v1  # 新版上传工具，更稳定
+      - name: Upload archive to Release
+        uses: softprops/action-gh-release@v1  # 稳定的第三方上传工具
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动获取，无需手动配置
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 现在有权限 write contents
         with:
-          files: ./${{ steps.prep.outputs.archive-name }}  # 上传压缩包
-          name: ${{ github.event.release.name }}  # 关联到当前 Release
+          files: ./${{ matrix.archive }}  # 上传当前平台的压缩包
+          overwrite: true  # 允许覆盖同名文件（更新 Release 时有用）
