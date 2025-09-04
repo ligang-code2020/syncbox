@@ -1,0 +1,55 @@
+name: Build Release
+
+on:
+  release:
+    types: [created]  # 当创建新 Release 时触发
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:  # 补充平台对应的二进制文件名和压缩方式
+          - os: ubuntu-latest
+            binary-name: syncbox
+            archive-format: tar.gz
+          - os: macos-latest
+            binary-name: syncbox
+            archive-format: tar.gz
+          - os: windows-latest
+            binary-name: syncbox.exe
+            archive-format: zip
+
+    steps:
+      - uses: actions/checkout@v4  # 拉取代码
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable  # 安装稳定版 Rust
+
+      - name: Build Release
+        run: cargo build --release  # 编译（去掉 --locked，避免锁文件问题）
+
+      - name: Prepare Artifact
+        id: prep
+        run: |
+          # 根据平台生成压缩包
+          if [ "${{ matrix.archive-format }}" = "tar.gz" ]; then
+            # Linux/macOS 用 tar 压缩
+            ARCHIVE_NAME="syncbox-${{ matrix.os }}.tar.gz"
+            tar -czf "$ARCHIVE_NAME" -C ./target/release "${{ matrix.binary-name }}"
+          else
+            # Windows 用 PowerShell 压缩（避免依赖 7z）
+            ARCHIVE_NAME="syncbox-windows.zip"
+            powershell -Command "Compress-Archive -Path ./target/release/${{ matrix.binary-name }} -DestinationPath $ARCHIVE_NAME"
+          fi
+          echo "archive-name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1  # 新版上传工具，更稳定
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动获取，无需手动配置
+        with:
+          files: ./${{ steps.prep.outputs.archive-name }}  # 上传压缩包
+          name: ${{ github.event.release.name }}  # 关联到当前 Release
