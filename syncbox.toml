@@ -1,16 +1,10 @@
 # syncbox.toml
 [[sync]]
 name = "task"
-source = "/Users/lg/source"
-target = "/Users/lg/target"
+source = "/Users/lg/Desktop/syncbox/source"
+target = "/Users/lg/Desktop/syncbox/target"
 exclude = [".log", ".DS_Store"]
 
-
-[[sync]]
-name = "task1"
-source = "/Users/lg/source_1"
-target = "/Users/lg/target_1"
-exclude = [".log", ".DS_Store"]
 
 
 

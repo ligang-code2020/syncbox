@@ -367,7 +367,7 @@ mod sync_logic {
         // 检查是否有需要同步的文件
         if sync_queue.is_empty() {
             // 没有文件需要同步，直接提示并返回
-            info!("✅无需同步，已经是最新的了");
+            debug!("✅无需同步，已经是最新的了");
             return Ok(());
         }
 
