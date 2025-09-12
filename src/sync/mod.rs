@@ -1,6 +1,7 @@
 use crate::infra::error::SyncError;
-use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use crate::utils::{create_progress_bar, format_file_size};
 use notify::{Event, EventKind, RecursiveMode, Watcher, recommended_watcher};
+use num_format::{Locale, ToFormattedString};
 use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -287,6 +288,121 @@ mod file_ops {
         std::io::copy(&mut file, &mut hasher)?;
         Ok(hasher.finalize().into())
     }
+
+    /// 删除文件（安全删除，记录错误）
+    ///
+    /// # 参数
+    /// - `path`: 要删除的文件路径
+    ///
+    /// # 注意
+    /// 不会 panic，错误会返回或记录日志。
+
+    pub async fn delete_extra_files(
+        source: &PathBuf,
+        target: &PathBuf,
+        dry_run: bool,
+        exclude: &[String],
+    ) -> anyhow::Result<()> {
+        use std::collections::HashSet;
+
+        // 1. 扫描源目录，收集所有文件的相对路径（String）
+        let source_files: HashSet<String> = scan_directory(source, exclude, false)?
+            .into_iter()
+            .filter_map(|info| {
+                info.path
+                    .strip_prefix(source)
+                    .ok()
+                    .map(|rel| rel.to_string_lossy().to_string())
+            })
+            .collect();
+
+        // 2. 递归遍历目标目录
+        let mut to_delete = Vec::new();
+        scan_target_for_deletion(
+            target,
+            target,
+            &source,
+            &source_files,
+            exclude,
+            &mut to_delete,
+        )
+        .await?;
+
+        // 3. 执行删除
+        for path in &to_delete {
+            if dry_run {
+                info!(
+                    path = %path.display(),
+                    action = "would_delete",
+                    "Dry run: would delete file"
+                );
+            } else {
+                match tokio::fs::remove_file(path).await {
+                    Ok(()) => info!(
+                        path = %path.display(),
+                        action = "deleted",
+                        "Deleted extra file"
+                    ),
+                    Err(e) => warn!(
+                        error = ?e,
+                        path = %path.display(),
+                        "Failed to delete extra file"
+                    ),
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 递归扫描目标目录，找出需要删除的文件（源目录中没有）
+    ///
+    /// # 参数
+    /// - `source_files`: 源目录的文件列表
+    /// - `target_root`: 目标根目录
+    /// - `excludes`: 排除规则
+    ///
+    /// # 返回
+    /// - `Ok(Vec<PathBuf>)`: 可以安全删除的文件列表
+
+    pub(crate) async fn scan_target_for_deletion(
+        current: &PathBuf,
+        target_root: &PathBuf,
+        source_root: &PathBuf,
+        source_files: &std::collections::HashSet<String>,
+        exclude: &[String],
+        to_delete: &mut Vec<PathBuf>,
+    ) -> std::io::Result<()> {
+        let mut dir = tokio::fs::read_dir(current).await?;
+
+        while let Some(entry) = dir.next_entry().await? {
+            let path = entry.path();
+
+            if path.is_dir() {
+                // ✅ 使用 Box::pin 包装递归调用，引入间接层
+                let future = scan_target_for_deletion(
+                    &path,
+                    target_root,
+                    source_root,
+                    source_files,
+                    exclude,
+                    to_delete,
+                );
+                Box::pin(future).await?;
+            } else {
+                if let Ok(rel_path) = path.strip_prefix(target_root) {
+                    let rel_str = rel_path.to_string_lossy().to_string();
+                    if !source_files.contains(&rel_str)
+                        && !should_exclude(&path, source_root, exclude)
+                    {
+                        to_delete.push(path);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 // ==============================================
@@ -300,6 +416,7 @@ mod sync_logic {
         pub dry_run: bool,
         pub excludes: Vec<String>,
         pub checksum: bool,
+        pub delete_extra: bool,
     }
 
     impl Default for SyncOptions {
@@ -308,6 +425,7 @@ mod sync_logic {
                 dry_run: false,
                 excludes: vec![],
                 checksum: false,
+                delete_extra: false,
             }
         }
     }
@@ -325,6 +443,7 @@ mod sync_logic {
     /// - `target`: 目标目录
     /// - `dry_run`: 是否为试运行（不实际修改文件）
     /// - `excludes`: 排除规则
+    /// - `delete_extra`: 是否删除目标目录中多余的文件
     ///
     /// # 返回
     /// - `Ok(SyncReport)`: 同步结果报告
@@ -338,8 +457,6 @@ mod sync_logic {
         // 1. 扫描源目录获取所有文件
         let source_files = scan_directory(source, &options.excludes, options.checksum)
             .map_err(|e| anyhow::anyhow!("Failed to scan source directory -> {}", e))?;
-
-
 
         // 2. 预扫描：筛选出需要同步的文件，并计算总大小
         let mut sync_queue = Vec::new();
@@ -365,9 +482,9 @@ mod sync_logic {
         }
 
         // 检查是否有需要同步的文件
-        if sync_queue.is_empty() {
+        if sync_queue.is_empty() && !options.delete_extra {
             // 没有文件需要同步，直接提示并返回
-            debug!("✅无需同步，已经是最新的了");
+            info!("✅无需同步，已经是最新的了");
             return Ok(());
         }
 
@@ -388,14 +505,7 @@ mod sync_logic {
             }
         } else {
             // 正常模式：初始化进度条
-            let pb = ProgressBar::new(total_sync_size);
-            pb.set_style(ProgressStyle::with_template(
-                "{spinner:.green} [{elapsed_precise}] [{bar:50.cyan/blue}] {bytes}/{total_bytes} ({eta})"
-            )?
-                .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-                    write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
-                })
-                .progress_chars("#>-"));
+            let pb = create_progress_bar(total_sync_size);
 
             for (source_info, target_path) in &sync_queue {
                 match copy_file(&source_info.path, &target_path, options.dry_run).await {
@@ -428,15 +538,41 @@ mod sync_logic {
 
         // 5. 统计信息（跳过的文件=总文件数-待同步文件数）
         let skipped = source_files.len() - sync_queue.len();
-        info!(
-            total = source_files.len(),
-            to_sync = sync_queue.len(),
-            copied = if options.dry_run { 0 } else { copied },
-            skipped,
-            failed = failed_to_copy,
-            dry_run = options.dry_run,
-            "Sync completed"
-        );
+
+        if !sync_queue.is_empty() {
+            debug!(
+                dry_run = options.dry_run,
+                delete_extra = options.delete_extra,
+            );
+            let sync_summary = format!(
+                "同步完成!\n\
+                源文件总数: {}，总大小: {} ({})\n\
+                需要同步: {}，已复制: {}，已跳过: {}，失败: {}",
+                source_files.len().to_formatted_string(&Locale::en), // 英文逗号分隔
+                total_sync_size.to_formatted_string(&Locale::en),
+                format_file_size(total_sync_size),
+                sync_queue.len().to_formatted_string(&Locale::en),
+                if options.dry_run { 0 } else { copied }.to_formatted_string(&Locale::en),
+                skipped.to_formatted_string(&Locale::en),
+                failed_to_copy.to_formatted_string(&Locale::en)
+            );
+
+            info!("{}", sync_summary);
+        }
+
+        if options.delete_extra {
+            if let Err(e) =
+                delete_extra_files(source, target, options.dry_run, &options.excludes).await
+            {
+                warn!(
+                    error = ?e,
+                    "Failed to delete extra files during sync"
+                );
+                // 可选：如果你想让 delete_extra 失败导致整体失败，可以：
+                // return Err(e.into());
+                // 但通常建议继续，只记录警告
+            }
+        }
 
         if failed_to_copy > 0 {
             warn!(count = failed_to_copy, "Some files failed to copy");
@@ -469,6 +605,7 @@ mod watcher {
         let options = SyncOptions {
             dry_run: false, // watch 模式通常不是 dry_run
             excludes: task.exclude.clone(),
+            delete_extra: task.delete_extra,
             checksum: false,
         };
 
@@ -489,24 +626,12 @@ mod watcher {
             recommended_watcher(move |res: std::result::Result<Event, notify::Error>| {
                 match res {
                     Ok(event) => {
-                        // 只关心二类事件：修改、创建
+                        // 只关心三类事件：修改、创建、删除
                         // 忽略元数据变更（如访问时间）、重命名等，避免过度触发
                         match event.kind {
                             // 只处理文件内容修改和创建事件
-                            EventKind::Create(_) => {
+                            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
                                 let _ = tx.send(event);
-                            }
-                            EventKind::Modify(modify_kind) => {
-                                // 仅处理文件内容数据修改，忽略元数据、权限等变更
-                                if matches!(modify_kind, notify::event::ModifyKind::Data(_)) {
-                                    let _ = tx.send(event);
-                                } else {
-                                    debug!(event = ?event, "Ignored non-data modify event");
-                                }
-                            }
-                            // 明确忽略删除相关事件（包括可能的元数据变更）
-                            EventKind::Remove(_) => {
-                                debug!(event = ?event, "Ignored file removal event");
                             }
                             _ => {
                                 debug!(event = ?event, "Ignored file system event");
@@ -608,7 +733,7 @@ mod watcher {
 // ==============================================
 
 use crate::sync::file_ops::compute_blake3_hash;
-pub use file_ops::copy_file;
+pub use file_ops::{copy_file, delete_extra_files};
 pub use filter::{should_exclude, should_sync};
 pub use scanner::scan_directory;
 pub use sync_logic::{SyncOptions, sync_directories};

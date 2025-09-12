@@ -19,6 +19,7 @@ async fn test_source_directory_not_found() {
             dry_run: false,
             excludes: vec![],
             checksum: false,
+            delete_extra: false,
         },
     )
     .await;

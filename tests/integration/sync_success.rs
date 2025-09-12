@@ -26,6 +26,7 @@ async fn test_sync_success() {
             dry_run: false,
             excludes: vec![],
             checksum: true,
+            delete_extra: false,
         },
     )
     .await;

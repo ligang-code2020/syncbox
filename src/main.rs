@@ -28,6 +28,7 @@ async fn main() -> anyhow::Result<()> {
                 dry_run,
                 excludes: vec![],
                 checksum, // 新增
+                delete_extra: false,
             };
             sync::sync_directories(&source, &target, &options).await?;
         }
@@ -58,7 +59,8 @@ async fn main() -> anyhow::Result<()> {
             let options = sync::SyncOptions {
                 dry_run,
                 excludes: task.exclude.clone(),
-                checksum, // 新增
+                checksum,
+                delete_extra: task.delete_extra,
             };
 
             // 3. 执行同步
