@@ -4,7 +4,9 @@ name = "task"
 source = "/Users/lg/Desktop/syncbox/source"
 target = "/Users/lg/Desktop/syncbox/target"
 exclude = [".log"]
-delete_extra = true
+delete_extra = false
+delete_extra_exclude = [".DS_Store"]
+
 
 
 

@@ -31,6 +31,7 @@ async fn test_target_directory_not_writable() {
             excludes: vec![],
             checksum: true,
             delete_extra: false,
+            delete_excludes: vec![],
         },
     )
     .await;

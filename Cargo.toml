@@ -21,7 +21,7 @@ notify = "8.1.0"
 tokio-util = { version = "0.7.16" }
 time = "0.3.41"
 tracing = "0.1.41"
-tracing-subscriber = { version = " 0.3.19", features = ["env-filter"] }
+tracing-subscriber = { version = " 0.3.19", features = ["env-filter", "fmt"] }
 thiserror = "2.0.16"
 walkdir = "2.5.0"
 indicatif = "0.18.0"

@@ -28,6 +28,9 @@ pub struct SyncTask {
 
     #[serde(default = "default_delete_extra")]
     pub delete_extra: bool,
+
+    #[serde(default)]
+    pub delete_extra_exclude: Vec<String>,
 }
 
 fn default_delete_extra() -> bool {

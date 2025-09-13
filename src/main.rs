@@ -2,7 +2,6 @@ use clap::Parser;
 use syncbox::{cli, infra, sync};
 use tracing::info;
 
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     infra::logging::init_logger(); // 初始化日志
@@ -27,8 +26,9 @@ async fn main() -> anyhow::Result<()> {
             let options = sync::SyncOptions {
                 dry_run,
                 excludes: vec![],
-                checksum, // 新增
+                checksum,
                 delete_extra: false,
+                delete_excludes: vec![],
             };
             sync::sync_directories(&source, &target, &options).await?;
         }
@@ -61,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
                 excludes: task.exclude.clone(),
                 checksum,
                 delete_extra: task.delete_extra,
+                delete_excludes: task.delete_extra_exclude.clone(),
             };
 
             // 3. 执行同步
@@ -70,7 +71,8 @@ async fn main() -> anyhow::Result<()> {
         cli::Command::Watch {
             name,
             config,
-            delay, ..
+            delay,
+            ..
         } => {
             info!("Watching task: {}", name);
 
