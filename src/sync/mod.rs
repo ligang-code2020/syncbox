@@ -649,30 +649,10 @@ mod sync_logic {
             pb.finish_with_message("File sync completed");
         }
 
-        if !sync_queue.is_empty() {
-            // debug!(
-            //     dry_run = options.dry_run,
-            //     delete_extra = options.delete_extra,
-            // );
-            // let sync_summary = format!(
-            //     "同步完成!\n\
-            //     源文件总数: {}，总大小: {} ({})\n\
-            //     需要同步: {}，已复制: {}，失败: {}",
-            //     source_files.len().to_formatted_string(&Locale::en), // 英文逗号分隔
-            //     total_sync_size.to_formatted_string(&Locale::en),
-            //     format_file_size(total_sync_size),
-            //     sync_queue.len().to_formatted_string(&Locale::en),
-            //     if options.dry_run { 0 } else { copied }.to_formatted_string(&Locale::en),
-            //     failed_to_copy.to_formatted_string(&Locale::en)
-            // );
-            //
-            // info!("{}", sync_summary);
+        if report.errors.len() > 0 {
+            warn!(count = report.errors.len(), "Some files failed to copy");
+            anyhow::bail!("Failed to copy {} files", report.errors.len());
         }
-
-        // if failed_to_copy > 0 {
-        //     warn!(count = failed_to_copy, "Some files failed to copy");
-        //     anyhow::bail!("Failed to copy {} files", failed_to_copy);
-        // }
 
         // 5. 统一输出整合后的结果
         print_report(
