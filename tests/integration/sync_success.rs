@@ -26,6 +26,7 @@ async fn test_sync_success() {
         excludes: vec![],
         delete_extra: false,
         delete_excludes: vec![],
+        detail: false,
     };
 
     // 3. 执行同步

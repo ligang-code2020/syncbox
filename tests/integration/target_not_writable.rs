@@ -30,6 +30,7 @@ async fn test_target_directory_not_writable() {
         excludes: vec![],
         delete_extra: false,
         delete_excludes: vec![],
+        detail: false,
     };
 
     // 尝试同步

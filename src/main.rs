@@ -20,6 +20,7 @@ async fn main() -> anyhow::Result<()> {
             delete,
             exclude,
             delete_exclude,
+            detail
         } => {
             let params = sync::SyncParameters {
                 source: source.clone(),
@@ -29,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
                 excludes: exclude.clone(),
                 delete_extra: delete,
                 delete_excludes: delete_exclude.clone(),
+                detail
             };
 
             info!(
@@ -45,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
             config,
             dry_run,
             checksum, // 新增
+            detail
         } => {
             info!("Running task: {}", name);
 
@@ -66,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
             let mut params = sync::SyncParameters::from(task);
             params.dry_run = dry_run;
             params.checksum = checksum;
+            params.detail = detail;
 
             // 调用统一核心逻辑
             sync::sync_directories(&params).await?;
@@ -75,9 +79,10 @@ async fn main() -> anyhow::Result<()> {
         cli::Command::Watch {
             name,
             config,
+            dry_run,
             delay,
             checksum,
-            ..
+            detail
         } => {
             info!("Watching task: {}", name);
 
@@ -90,6 +95,8 @@ async fn main() -> anyhow::Result<()> {
 
             let mut params = sync::SyncParameters::from(task);
             params.checksum = checksum; // 新增此行
+            params.detail = detail;
+            params.dry_run = dry_run;
             sync::watch_task(&params, delay).await?;
         }
     }

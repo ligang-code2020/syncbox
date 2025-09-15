@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::{debug, error, info, warn};
+use chrono::Local;
 
 // ==============================================
 // 公共类型定义（对外暴露）
@@ -70,6 +71,8 @@ pub struct SyncParameters {
     pub delete_extra: bool,
     /// 排除目标目录删除列表
     pub delete_excludes: Vec<String>,
+    /// 是否显示详细操作列表
+    pub detail: bool,
 }
 
 // 实现从不同来源转换为统一参数
@@ -84,6 +87,7 @@ impl From<&cli::Command> for SyncParameters {
                 delete,
                 exclude,
                 delete_exclude,
+                detail,
             } => Self {
                 source: source.clone(),
                 target: target.clone(),
@@ -92,12 +96,14 @@ impl From<&cli::Command> for SyncParameters {
                 excludes: exclude.clone(),
                 delete_extra: *delete,
                 delete_excludes: delete_exclude.clone(),
+                detail: *detail,
             },
             cli::Command::Run {
                 name: _,
                 config: _,
                 dry_run,
                 checksum,
+                detail,
             } => {
                 // 这里只是占位，实际会在加载配置后覆盖
                 Self {
@@ -108,9 +114,26 @@ impl From<&cli::Command> for SyncParameters {
                     excludes: Vec::new(),
                     delete_extra: false,
                     delete_excludes: Vec::new(),
+                    detail: *detail,
                 }
             }
-            _ => panic!("Unsupported command type"),
+            cli::Command::Watch {
+                name: _,
+                config: _,
+                delay: _,
+                checksum,
+                dry_run,
+                detail,
+            } => Self {
+                source: PathBuf::new(),
+                target: PathBuf::new(),
+                dry_run: *dry_run,
+                checksum: *checksum,
+                excludes: Vec::new(),
+                delete_extra: false,
+                delete_excludes: Vec::new(),
+                detail: *detail,
+            }
         }
     }
 }
@@ -126,6 +149,7 @@ impl From<&config::SyncTask> for SyncParameters {
             excludes: task.exclude.clone(),
             delete_extra: task.delete_extra,
             delete_excludes: task.delete_extra_exclude.clone(),
+            detail: false,
         }
     }
 }
@@ -580,15 +604,6 @@ mod sync_logic {
             report.delete_errors = delete_errors;
         }
 
-        println!(
-            "待同步的文件：{:?}\n\
-            是否开启删除：{:?}\n\
-             将会删除文件：{:?}\n\
-              已经删除的文件：{:?}\n\
-              ----------------------------------------------",
-            sync_queue, options.delete_extra, report.would_delete, report.deleted
-        );
-
         // 检查是否有需要同步的文件
         if sync_queue.is_empty()
             && (!options.delete_extra
@@ -603,6 +618,7 @@ mod sync_logic {
                 options.delete_extra,
                 source_files.len(),
                 total_sync_size,
+                params.detail,
             );
             return Ok(report);
         }
@@ -612,9 +628,8 @@ mod sync_logic {
 
         if options.dry_run {
             // Dry-run 模式：列出所有将被同步的文件
-            for (_source_info, target_path) in &sync_queue {
-                // report.copied.push(target_path.clone());
-                report.copied.push(target_path.to_path_buf());
+            for (source_info, _target_path) in &sync_queue {
+                report.copied.push(source_info.path.clone());
             }
         } else {
             // 正常模式：初始化进度条
@@ -623,7 +638,7 @@ mod sync_logic {
             for (source_info, target_path) in &sync_queue {
                 match copy_file(&source_info.path, target_path, options.dry_run).await {
                     Ok(()) => {
-                        report.copied.push(target_path.clone());
+                        report.copied.push(source_info.path.clone());
                         processed_size += source_info.size;
                         pb.set_position(processed_size);
                         debug!(
@@ -663,6 +678,7 @@ mod sync_logic {
             options.delete_extra, // 新增：是否启用删除功能
             source_files.len(),
             total_sync_size,
+            params.detail,
         );
 
         Ok(report)
@@ -852,6 +868,7 @@ mod report {
         delete_extra: bool,
         total_source_files: usize,
         total_sync_size: u64,
+        detail: bool,
     ) {
         if is_latest {
             warn!("未发现待同步的文件");
@@ -875,6 +892,13 @@ mod report {
         )
         .unwrap();
 
+        if detail && !report.copied.is_empty() {
+            writeln!(output, "{}同步的文件：", if dry_run { "待" } else { "" }).unwrap();
+            for path in &report.copied {
+                writeln!(output, "  - {}", path.display()).unwrap();
+            }
+        }
+
         // 3. 同步错误信息
         if !dry_run && !report.errors.is_empty() {
             writeln!(
@@ -883,6 +907,13 @@ mod report {
                 report.errors.len().to_formatted_string(&Locale::en)
             )
             .unwrap();
+        }
+
+        if detail && !report.errors.is_empty() {
+            writeln!(output, "同步错误详情：").unwrap();
+            for (path, err) in &report.errors {
+                writeln!(output, "  - {}: {}", path.display(), err).unwrap();
+            }
         }
 
         // 4. 删除信息（仅当启用删除且有数据时显示）
@@ -901,6 +932,12 @@ mod report {
                         report.would_delete.len().to_formatted_string(&Locale::en)
                     )
                     .unwrap();
+                    if detail && !report.would_delete.is_empty() {
+                        writeln!(output, "待删除的文件：").unwrap();
+                        for path in &report.would_delete {
+                            writeln!(output, "  - {}", path.display()).unwrap();
+                        }
+                    }
                 } else {
                     writeln!(
                         output,
@@ -908,6 +945,12 @@ mod report {
                         report.deleted.len().to_formatted_string(&Locale::en)
                     )
                     .unwrap();
+                    if detail && !report.deleted.is_empty() {
+                        writeln!(output, "已删除的文件：").unwrap();
+                        for path in &report.deleted {
+                            writeln!(output, "  - {}", path.display()).unwrap();
+                        }
+                    }
 
                     if !report.delete_errors.is_empty() {
                         writeln!(
@@ -916,12 +959,19 @@ mod report {
                             report.delete_errors.len().to_formatted_string(&Locale::en)
                         )
                         .unwrap();
+                        if detail {
+                            writeln!(output, "删除错误详情：").unwrap();
+                            for (path, err) in &report.delete_errors {
+                                writeln!(output, "  - {}: {}", path.display(), err).unwrap();
+                            }
+                        }
                     }
                 }
             }
         }
 
-        info!("{}", output);
+        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        info!("[{}] {}", timestamp, output);
     }
 }
 

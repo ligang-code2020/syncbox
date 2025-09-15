@@ -12,7 +12,6 @@ pub struct Args {
 
 #[derive(clap::Subcommand)]
 pub enum Command {
-    /// Sync a directory to another location
     Sync {
         /// 源目录路径
         source: PathBuf,
@@ -33,28 +32,29 @@ pub enum Command {
         /// 排除删除的文件或目录（即使 delete=true 也不会删这些，可多次指定）
         #[arg(long, value_name = "PATTERN", alias = "delete-ignore")]
         delete_exclude: Vec<String>,
+        /// 显示详细操作列表（哪些文件被同步/删除）
+        #[arg(long)]
+        detail: bool,
     },
     Run {
-        /// Name of the task to run (from config)
         name: String,
-
         /// Config file path (optional, default: ./syncbox.toml)
         #[arg(long, default_value = "syncbox.toml")]
         config: PathBuf,
 
-        /// Perform a dry run
         #[arg(long)]
         dry_run: bool,
 
         #[arg(long)]
         checksum: bool,
+
+        #[arg(long)]
+        detail: bool,
     },
 
     Watch {
-        /// Name of the task to watch
         name: String,
 
-        /// Config file path (default: syncbox.toml)
         #[arg(long, default_value = "syncbox.toml")]
         config: PathBuf,
 
@@ -63,6 +63,12 @@ pub enum Command {
         delay: u64,
 
         #[arg(long)]
+        dry_run: bool,
+
+        #[arg(long)]
         checksum: bool,
+
+        #[arg(long)]
+        detail: bool,
     },
 }
