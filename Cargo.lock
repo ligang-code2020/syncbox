@@ -846,6 +846,7 @@ dependencies = [
  "indicatif",
  "notify",
  "num-format",
+ "regex",
  "serde",
  "tempfile",
  "thiserror",

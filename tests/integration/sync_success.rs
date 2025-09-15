@@ -1,6 +1,6 @@
 use std::fs;
-use syncbox::sync::SyncOptions;
 use syncbox::sync::sync_directories;
+use syncbox::sync::{SyncOptions, SyncParameters};
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -18,19 +18,18 @@ async fn test_sync_success() {
     let content = "Hello, SyncBox!";
     fs::write(&source_file, content).unwrap();
 
+    let params = SyncParameters {
+        source,
+        target: target.clone(),
+        dry_run: false,
+        checksum: false,
+        excludes: vec![],
+        delete_extra: false,
+        delete_excludes: vec![],
+    };
+
     // 3. 执行同步
-    let result = sync_directories(
-        &source,
-        &target,
-        &SyncOptions {
-            dry_run: false,
-            excludes: vec![],
-            checksum: true,
-            delete_extra: false,
-            delete_excludes: vec![],
-        },
-    )
-    .await;
+    let result = sync_directories(&params).await;
 
     // 4. 验证：同步应该成功
     assert!(result.is_ok(), "Sync failed: {:?}", result);

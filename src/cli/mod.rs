@@ -14,18 +14,25 @@ pub struct Args {
 pub enum Command {
     /// Sync a directory to another location
     Sync {
-        /// Source directory
+        /// 源目录路径
         source: PathBuf,
-
-        /// Target directory
+        /// 目标目录路径
         target: PathBuf,
-
-        /// Perform a dry run without making changes
+        /// 试运行模式（不实际写入）
         #[arg(long)]
         dry_run: bool,
-
+        /// 使用校验和比较文件内容（而非仅修改时间/大小）
         #[arg(long)]
         checksum: bool,
+        /// 删除目标目录中源目录不存在的文件
+        #[arg(long)]
+        delete: bool,
+        /// 排除同步的文件或目录（支持通配符，可多次指定）
+        #[arg(long, value_name = "PATTERN")]
+        exclude: Vec<String>,
+        /// 排除删除的文件或目录（即使 delete=true 也不会删这些，可多次指定）
+        #[arg(long, value_name = "PATTERN", alias = "delete-ignore")]
+        delete_exclude: Vec<String>,
     },
     Run {
         /// Name of the task to run (from config)

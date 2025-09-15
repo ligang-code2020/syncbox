@@ -1,6 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use syncbox::sync::sync_directories;
+use syncbox::sync::{sync_directories, SyncParameters};
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -19,8 +19,18 @@ async fn test_source_file_permission_denied() {
     let no_perm = fs::Permissions::from_mode(0o000);
     fs::set_permissions(&file, no_perm).unwrap();
 
+    let params = SyncParameters{
+        source,
+        target,
+        dry_run: false,
+        checksum: false,
+        excludes: vec![],
+        delete_extra: false,
+        delete_excludes: vec![],
+    };
+
     // 尝试同步
-    let result = sync_directories(&source, &target, &Default::default()).await;
+    let result = sync_directories(&params).await;
 
     // 验证：应该失败
     assert!(result.is_err());

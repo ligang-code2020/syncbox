@@ -27,6 +27,7 @@ walkdir = "2.5.0"
 indicatif = "0.18.0"
 blake3 = "1.8.2"
 num-format = "0.4.4"
+regex = "1.11.2"
 
 
 

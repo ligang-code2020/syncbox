@@ -1,5 +1,6 @@
 use crate::infra::error::SyncError;
 use crate::utils::{create_progress_bar, format_file_size};
+use crate::{cli, config};
 use notify::{Event, EventKind, RecursiveMode, Watcher, recommended_watcher};
 use num_format::{Locale, ToFormattedString};
 use std::fs;
@@ -52,94 +53,80 @@ impl FileInfo {
     }
 }
 
-mod report {
-    use super::*;
-    use std::fmt::Write;
+// 定义统一的同步参数结构
+#[derive(Debug, Clone)]
+pub struct SyncParameters {
+    /// 源目录
+    pub source: PathBuf,
+    /// 目标目录
+    pub target: PathBuf,
+    /// 试运行模式
+    pub dry_run: bool,
+    /// 是否使用校验和比较
+    pub checksum: bool,
+    /// 排除同步规则列表
+    pub excludes: Vec<String>,
+    /// 是否删除目标额外文件
+    pub delete_extra: bool,
+    /// 排除目标目录删除列表
+    pub delete_excludes: Vec<String>,
+}
 
-    /// 同步操作的结果报告
-    #[derive(Debug, Default)]
-    pub struct SyncReport {
-        pub copied: Vec<PathBuf>,                  // 成功复制的文件
-        pub errors: Vec<(PathBuf, String)>,        // 同步错误
-        pub deleted: Vec<PathBuf>,                 // 成功删除的文件
-        pub would_delete: Vec<PathBuf>,            // dry-run模式下待删除的文件
-        pub delete_errors: Vec<(PathBuf, String)>, // 删除错误
-    }
-
-    /// 统一打印同步和删除的结果
-    pub fn print_report(
-        report: &SyncReport,
-        dry_run: bool,
-        delete_extra: bool,
-        total_source_files: usize,
-        total_sync_size: u64,
-    ) {
-        let mut output = String::new();
-
-        // 1. 基础同步信息
-        writeln!(
-            output,
-            "{}\n源文件总数：{}，同步文件数: {} ({})",
-            if dry_run {
-                "试运行模式"
-            } else {
-                "同步成功！"
+// 实现从不同来源转换为统一参数
+impl From<&cli::Command> for SyncParameters {
+    fn from(cmd: &cli::Command) -> Self {
+        match cmd {
+            cli::Command::Sync {
+                source,
+                target,
+                dry_run,
+                checksum,
+                delete,
+                exclude,
+                delete_exclude,
+            } => Self {
+                source: source.clone(),
+                target: target.clone(),
+                dry_run: *dry_run,
+                checksum: *checksum,
+                excludes: exclude.clone(),
+                delete_extra: *delete,
+                delete_excludes: delete_exclude.clone(),
             },
-            total_source_files.to_formatted_string(&Locale::en),
-            report.copied.len().to_formatted_string(&Locale::en),
-            format_file_size(total_sync_size)
-        )
-        .unwrap();
-
-
-
-        // 3. 同步错误信息
-        if !dry_run && !report.errors.is_empty() {
-            writeln!(
-                output,
-                "同步错误数: {}",
-                report.errors.len().to_formatted_string(&Locale::en)
-            )
-            .unwrap();
-        }
-
-        // 4. 删除信息（仅当启用删除且有数据时显示）
-        if delete_extra {
-            let has_delete_data = if dry_run {
-                !report.would_delete.is_empty() // 试运行：待删除不为空
-            } else {
-                !report.deleted.is_empty() || !report.delete_errors.is_empty() // 正常模式：已删除或删除错误不为空
-            };
-
-            if has_delete_data {
-                if dry_run {
-                    writeln!(
-                        output,
-                        "待删除文件数: {}",
-                        report.would_delete.len().to_formatted_string(&Locale::en)
-                    )
-                    .unwrap();
-                } else {
-                    writeln!(
-                        output,
-                        "已删除文件数: {}",
-                        report.deleted.len().to_formatted_string(&Locale::en)
-                    )
-                    .unwrap();
-
-                    if !report.delete_errors.is_empty() {
-                        writeln!(
-                            output,
-                            "删除错误数: {}",
-                            report.delete_errors.len().to_formatted_string(&Locale::en)
-                        )
-                        .unwrap();
-                    }
+            cli::Command::Run {
+                name: _,
+                config: _,
+                dry_run,
+                checksum,
+            } => {
+                // 这里只是占位，实际会在加载配置后覆盖
+                Self {
+                    source: PathBuf::new(),
+                    target: PathBuf::new(),
+                    dry_run: *dry_run,
+                    checksum: *checksum,
+                    excludes: Vec::new(),
+                    delete_extra: false,
+                    delete_excludes: Vec::new(),
                 }
             }
+            _ => panic!("Unsupported command type"),
         }
+    }
+}
 
-        info!("{}", output);
+// 从配置任务转换
+impl From<&config::SyncTask> for SyncParameters {
+    fn from(task: &config::SyncTask) -> Self {
+        Self {
+            source: task.source.clone(),
+            target: task.target.clone(),
+            dry_run: false,  // 由命令行参数决定
+            checksum: false, // 由命令行参数决定
+            excludes: task.exclude.clone(),
+            delete_extra: task.delete_extra,
+            delete_excludes: task.delete_extra_exclude.clone(),
+        }
     }
 }
 
@@ -281,9 +268,12 @@ mod filter {
                     return true;
                 }
             } else {
-                // 否则，匹配后缀（如 .tmp）
-                if relative_str.ends_with(pattern) {
-                    return true;
+                // 将通配符 * 转换为正则的 .*，支持 *.log 匹配所有 .log 后缀文件
+                let regex_pattern = pattern.replace('*', ".*");
+                if let Ok(regex) = regex::Regex::new(&format!("^{}$", regex_pattern)) {
+                    if regex.is_match(&relative_str) {
+                        return true;
+                    }
                 }
             }
         }
@@ -420,28 +410,14 @@ mod file_ops {
         // 3. 执行删除
         for path in &to_delete {
             if dry_run {
-                info!(
-                    path = %path.display(),
-                    action = "would_delete",
-                    "Dry run: would delete file"
-                );
                 would_delete.push(path.clone());
             } else {
                 match tokio::fs::remove_file(path).await {
                     Ok(()) => {
-                        //     info!(
-                        //     path = %path.display(),
-                        //     action = "deleted",
-                        //     "Deleted extra file"
-                        // )
                         deleted.push(path.clone());
+                        would_delete.push(path.clone());
                     }
                     Err(e) => {
-                        //     warn!(
-                        //     error = ?e,
-                        //     path = %path.display(),
-                        //     "Failed to delete extra file"
-                        // )
                         delete_errors.push((path.clone(), e.to_string()));
                     }
                 }
@@ -551,15 +527,19 @@ mod sync_logic {
     /// - `Ok(SyncReport)`: 同步结果报告
     /// - `Err(_)`: 致命错误（如源目录不存在）
 
-    pub async fn sync_directories(
-        source: &PathBuf,
-        target: &PathBuf,
-        options: &SyncOptions,
-    ) -> anyhow::Result<SyncReport> {
+    pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncReport> {
+        let options = SyncOptions {
+            dry_run: params.dry_run,
+            excludes: params.excludes.clone(),
+            checksum: params.checksum,
+            delete_extra: params.delete_extra,
+            delete_excludes: params.delete_excludes.clone(),
+        };
+
         let mut report = SyncReport::default(); // 初始化报告
 
         // 1. 扫描源目录获取所有文件
-        let source_files = scan_directory(source, &options.excludes, options.checksum)
+        let source_files = scan_directory(&params.source, &options.excludes, options.checksum)
             .map_err(|e| anyhow::anyhow!("Failed to scan source directory -> {}", e))?;
 
         // 2. 预扫描：筛选出需要同步的文件，并计算总大小
@@ -569,9 +549,9 @@ mod sync_logic {
         for source_info in &source_files {
             let relative = source_info
                 .path
-                .strip_prefix(source)
+                .strip_prefix(&params.source)
                 .expect("File not under source root");
-            let target_path = target.join(relative);
+            let target_path = params.target.join(relative);
             let target_info = if target_path.exists() {
                 FileInfo::from_path(&target_path, options.checksum).ok()
             } else {
@@ -587,8 +567,8 @@ mod sync_logic {
 
         if options.delete_extra {
             let (deleted, would_delete, delete_errors) = delete_extra_files(
-                source,
-                target,
+                &params.source,
+                &params.target,
                 options.dry_run,
                 &options.excludes,
                 &options.delete_excludes,
@@ -600,10 +580,30 @@ mod sync_logic {
             report.delete_errors = delete_errors;
         }
 
+        println!(
+            "待同步的文件：{:?}\n\
+            是否开启删除：{:?}\n\
+             将会删除文件：{:?}\n\
+              已经删除的文件：{:?}\n\
+              ----------------------------------------------",
+            sync_queue, options.delete_extra, report.would_delete, report.deleted
+        );
+
         // 检查是否有需要同步的文件
-        if sync_queue.is_empty() && (!options.delete_extra || report.deleted.is_empty()) {
-            // 没有文件需要同步，直接提示并返回
-            info!("未发现待同步的文件");
+        if sync_queue.is_empty()
+            && (!options.delete_extra
+                || report.would_delete.is_empty()
+                || report.deleted.is_empty())
+        {
+            // 没有文件需要同步，直接返回
+            print_report(
+                true,
+                &report,
+                options.dry_run,
+                options.delete_extra,
+                source_files.len(),
+                total_sync_size,
+            );
             return Ok(report);
         }
 
@@ -613,14 +613,15 @@ mod sync_logic {
         if options.dry_run {
             // Dry-run 模式：列出所有将被同步的文件
             for (_source_info, target_path) in &sync_queue {
-                report.copied.push(target_path.clone());
+                // report.copied.push(target_path.clone());
+                report.copied.push(target_path.to_path_buf());
             }
         } else {
             // 正常模式：初始化进度条
             let pb = create_progress_bar(total_sync_size);
 
             for (source_info, target_path) in &sync_queue {
-                match copy_file(&source_info.path, &target_path, options.dry_run).await {
+                match copy_file(&source_info.path, target_path, options.dry_run).await {
                     Ok(()) => {
                         report.copied.push(target_path.clone());
                         processed_size += source_info.size;
@@ -656,6 +657,7 @@ mod sync_logic {
 
         // 5. 统一输出整合后的结果
         print_report(
+            false,
             &report,
             options.dry_run,
             options.delete_extra, // 新增：是否启用删除功能
@@ -687,16 +689,16 @@ mod watcher {
     /// # 注意
     /// 此函数会阻塞运行，直到监听被中断。
     pub async fn watch_task(
-        task: &crate::config::SyncTask,
+        params: &SyncParameters,
         delay_ms: u64,
     ) -> anyhow::Result<SyncReport, SyncError> {
-        let options = SyncOptions {
-            dry_run: false, // watch 模式通常不是 dry_run
-            excludes: task.exclude.clone(),
-            delete_extra: task.delete_extra,
-            checksum: false,
-            delete_excludes: task.delete_extra_exclude.clone(),
-        };
+        // let options = SyncOptions {
+        //     dry_run: false, // watch 模式通常不是 dry_run
+        //     excludes: params.excludes.clone(),
+        //     delete_extra: params.delete_extra,
+        //     checksum: false,
+        //     delete_excludes: params.delete_excludes.clone(),
+        // };
 
         let mut total_report = SyncReport::default(); // 累计所有同步的报告
 
@@ -739,19 +741,19 @@ mod watcher {
 
         // 5. 开始监听源目录（递归监听所有子目录）
         watcher
-            .watch(&task.source, RecursiveMode::Recursive)
+            .watch(&params.source, RecursiveMode::Recursive)
             .map_err(|e| {
                 anyhow::anyhow!(
                     "Failed to watch directory '{}': {}",
-                    task.source.display(),
+                    params.source.display(),
                     e
                 )
             })?;
 
         info!(
             "Started watching: {} → {}",
-            task.source.display(),
-            task.target.display()
+            params.source.display(),
+            params.target.display()
         );
 
         // 6. 主事件循环：接收文件变化事件并处理
@@ -798,7 +800,7 @@ mod watcher {
 
             // 7. 执行同步操作
             debug!("📁 Detected stable changes → syncing...");
-            match sync_directories(&task.source, &task.target, &options).await {
+            match sync_directories(&params).await {
                 Ok(report) => {
                     debug!("✅ Sync completed successfully");
                     total_report.copied.extend(report.copied);
@@ -807,13 +809,13 @@ mod watcher {
                 Err(e) => {
                     error!(
                         error = ?e,
-                        source = %task.source.display(),
-                        target = %task.target.display(),
+                        source = %params.source.display(),
+                        target = %params.target.display(),
                         "Sync failed during watch"
                     );
                     total_report
                         .errors
-                        .push((task.source.clone(), e.to_string()));
+                        .push((params.source.clone(), e.to_string()));
                 }
             }
 
@@ -821,6 +823,105 @@ mod watcher {
         }
 
         Ok(total_report)
+    }
+}
+
+// ==============================================
+// 模块 6：输出结果报告
+// 统一输出同步、删除结果
+// ==============================================
+mod report {
+    use super::*;
+    use std::fmt::Write;
+
+    /// 同步操作的结果报告
+    #[derive(Debug, Default)]
+    pub struct SyncReport {
+        pub copied: Vec<PathBuf>,                  // 成功复制的文件
+        pub errors: Vec<(PathBuf, String)>,        // 同步错误
+        pub deleted: Vec<PathBuf>,                 // 成功删除的文件
+        pub would_delete: Vec<PathBuf>,            // dry-run模式下待删除的文件
+        pub delete_errors: Vec<(PathBuf, String)>, // 删除错误
+    }
+
+    /// 统一打印同步和删除的结果
+    pub fn print_report(
+        is_latest: bool,
+        report: &SyncReport,
+        dry_run: bool,
+        delete_extra: bool,
+        total_source_files: usize,
+        total_sync_size: u64,
+    ) {
+        if is_latest {
+            warn!("未发现待同步的文件");
+            return;
+        }
+        let mut output = String::new();
+
+        // 1. 基础同步信息
+        writeln!(
+            output,
+            "{}\n源文件总数：{}，{}同步文件数: {} ({})",
+            if dry_run {
+                "试运行模式"
+            } else {
+                "同步成功！"
+            },
+            total_source_files.to_formatted_string(&Locale::en),
+            if dry_run { "待" } else { "" },
+            report.copied.len().to_formatted_string(&Locale::en),
+            format_file_size(total_sync_size)
+        )
+        .unwrap();
+
+        // 3. 同步错误信息
+        if !dry_run && !report.errors.is_empty() {
+            writeln!(
+                output,
+                "同步错误数: {}",
+                report.errors.len().to_formatted_string(&Locale::en)
+            )
+            .unwrap();
+        }
+
+        // 4. 删除信息（仅当启用删除且有数据时显示）
+        if delete_extra {
+            let has_delete_data = if dry_run {
+                !report.would_delete.is_empty() // 试运行：待删除不为空
+            } else {
+                !report.deleted.is_empty() || !report.delete_errors.is_empty() // 正常模式：已删除或删除错误不为空
+            };
+
+            if has_delete_data {
+                if dry_run {
+                    writeln!(
+                        output,
+                        "待删除文件数: {}",
+                        report.would_delete.len().to_formatted_string(&Locale::en)
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        output,
+                        "已删除文件数: {}",
+                        report.deleted.len().to_formatted_string(&Locale::en)
+                    )
+                    .unwrap();
+
+                    if !report.delete_errors.is_empty() {
+                        writeln!(
+                            output,
+                            "删除错误数: {}",
+                            report.delete_errors.len().to_formatted_string(&Locale::en)
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+        }
+
+        info!("{}", output);
     }
 }
 
