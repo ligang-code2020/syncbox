@@ -1,42 +1,53 @@
 use clap::Parser;
 use syncbox::{cli, infra, sync};
-use tracing::info;
-
+use tracing::{debug, info};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     infra::logging::init_logger(); // 初始化日志
     // 后续所有 tracing 日志都可用
-    tracing::info!("SyncBox 启动");
-    tracing::debug!("这是 debug 日志，只有 RUST_LOG=debug 时才显示");
+    info!("SyncBox 启动");
+    debug!("这是 debug 日志，只有 RUST_LOG=debug 时才显示");
 
     let args = cli::Args::parse();
     match args.command {
+        // ============ SYNC 模式 ============
         cli::Command::Sync {
             source,
             target,
             dry_run,
             checksum,
+            delete,
+            exclude,
+            delete_exclude,
+            detail
         } => {
+            let params = sync::SyncParameters {
+                source: source.clone(),
+                target: target.clone(),
+                dry_run,
+                checksum,
+                excludes: exclude.clone(),
+                delete_extra: delete,
+                delete_excludes: delete_exclude.clone(),
+                detail
+            };
+
             info!(
                 "Sync: copying file {} → {}",
                 source.display(),
                 target.display()
             );
-
-            let options = sync::SyncOptions {
-                dry_run,
-                excludes: vec![],
-                checksum, // 新增
-            };
-            sync::sync_directories(&source, &target, &options).await?;
+            sync::sync_directories(&params).await?;
         }
 
+        // ============ RUN TASK 模式 ============
         cli::Command::Run {
             name,
             config,
             dry_run,
             checksum, // 新增
+            detail
         } => {
             info!("Running task: {}", name);
 
@@ -55,20 +66,23 @@ async fn main() -> anyhow::Result<()> {
                 &task.target.display()
             );
 
-            let options = sync::SyncOptions {
-                dry_run,
-                excludes: task.exclude.clone(),
-                checksum, // 新增
-            };
+            let mut params = sync::SyncParameters::from(task);
+            params.dry_run = dry_run;
+            params.checksum = checksum;
+            params.detail = detail;
 
-            // 3. 执行同步
-            sync::sync_directories(&task.source, &task.target, &options).await?;
+            // 调用统一核心逻辑
+            sync::sync_directories(&params).await?;
         }
 
+        // ============ WATCH 模式 ============
         cli::Command::Watch {
             name,
             config,
-            delay, ..
+            dry_run,
+            delay,
+            checksum,
+            detail
         } => {
             info!("Watching task: {}", name);
 
@@ -79,7 +93,11 @@ async fn main() -> anyhow::Result<()> {
                 .find_task(&name)
                 .ok_or_else(|| anyhow::anyhow!("Task '{}' not found in config", name))?;
 
-            sync::watch_task(&task, delay).await?;
+            let mut params = sync::SyncParameters::from(task);
+            params.checksum = checksum; // 新增此行
+            params.detail = detail;
+            params.dry_run = dry_run;
+            sync::watch_task(&params, delay).await?;
         }
     }
 

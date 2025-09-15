@@ -26,8 +26,16 @@ pub struct SyncTask {
     #[serde(default)]
     pub exclude: Vec<String>,
 
+    #[serde(default = "default_delete_extra")]
+    pub delete_extra: bool,
+
+    #[serde(default)]
+    pub delete_extra_exclude: Vec<String>,
 }
 
+fn default_delete_extra() -> bool {
+    false
+}
 
 impl Config {
     // 从文件路径加载配置

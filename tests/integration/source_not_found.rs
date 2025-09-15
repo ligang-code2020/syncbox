@@ -1,6 +1,6 @@
 use std::path::Path;
-use syncbox::sync::SyncOptions;
 use syncbox::sync::sync_directories;
+use syncbox::sync::{SyncOptions, SyncParameters};
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -12,16 +12,18 @@ async fn test_source_directory_not_found() {
     let source = temp_dir.path().join("/this/path/does/not/exist/abc123");
     let target = temp_dir.path().join("/tmp/should-not-be-created");
 
-    let result = sync_directories(
-        &source,
-        &target,
-        &SyncOptions {
-            dry_run: false,
-            excludes: vec![],
-            checksum: false,
-        },
-    )
-    .await;
+    let params = SyncParameters {
+        source,
+        target,
+        dry_run: false,
+        checksum: false,
+        excludes: vec![],
+        delete_extra: false,
+        delete_excludes: vec![],
+        detail: false,
+    };
+
+    let result = sync_directories(&params).await;
 
     // 验证：应该失败
     assert!(result.is_err());
