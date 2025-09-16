@@ -1,11 +1,17 @@
 [package]
 name = "syncbox"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
-authors = ["Li Gang"]
-description = "A simple, reliable file sync tool for developers"
+authors = ["LiGang<ligang13874843373@gmail.com>"]
+description = "一个类似 rsync 的文件同步工具"
+homepage = "https://github.com/ligang-code2020/syncbox"
 license = "MIT"
 readme = "README.md"
+keywords = ["sync", "file-sync", "rsync", "syncbox"]
+categories = ["command-line-utilities"]  # 分类（参考 crates.io 分类列表）
+
+
+
 
 [[bin]]
 name = "syncbox"
