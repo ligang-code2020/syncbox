@@ -1,8 +1,8 @@
 # syncbox.toml
 [[sync]]
 name = "task"
-source = "/Users/lg/Desktop/syncbox/source"
-target = "/Users/lg/Desktop/syncbox/target"
+source = "/xx/xx/xxx/syncbox/source"
+target = "/xx/xx/xxx/syncbox/target"
 exclude = [".secret"]
 delete_extra = true
 delete_extra_exclude = [".DS_Store"]
