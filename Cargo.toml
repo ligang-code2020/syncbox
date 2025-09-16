@@ -11,10 +11,13 @@ keywords = ["sync", "file-sync", "rsync", "sync-box"]
 categories = ["command-line-utilities"]  # 分类（参考 crates.io 分类列表）
 
 
+[lib]
+name = "syncbox"  # 代码中引用的 crate 名
+
 
 
 [[bin]]
-name = "sync-box"
+name = "syncbox"
 path = "src/main.rs"
 
 [dependencies]
