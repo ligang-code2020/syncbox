@@ -103,8 +103,8 @@ syncbox sync ./source ./target --detail
 ```toml
 [[sync]]
 name = "task"
-source = "/Users/lg/Desktop/syncbox/source"
-target = "/Users/lg/Desktop/syncbox/target"
+source = "/xx/xx/xx/syncbox/source"
+target = "/xx/xx/xx/syncbox/target"
 exclude = [".log"]
 delete_extra = true
 delete_extra_exclude = [".DS_Store"]
