@@ -1,13 +1,11 @@
 use clap::Parser;
 use syncbox::{cli, infra, sync};
-use tracing::{debug, info};
+use tracing::{info};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    infra::logging::init_logger(); // 初始化日志
-    // 后续所有 tracing 日志都可用
-    info!("SyncBox 启动");
-    debug!("这是 debug 日志，只有 RUST_LOG=debug 时才显示");
+    infra::logging::init_logger();
+    info!("SyncBox Starting...");
 
     let args = cli::Args::parse();
     match args.command {
@@ -49,7 +47,6 @@ async fn main() -> anyhow::Result<()> {
             checksum, // 新增
             detail
         } => {
-            info!("Running task: {}", name);
 
             // 1. 加载配置文件
             let config = syncbox::config::Config::from_file(&config)
@@ -84,7 +81,8 @@ async fn main() -> anyhow::Result<()> {
             checksum,
             detail
         } => {
-            info!("Watching task: {}", name);
+
+
 
             let config = syncbox::config::Config::from_file(&config)
                 .map_err(|e| anyhow::anyhow!("Config error: {}", e))?;
@@ -92,6 +90,12 @@ async fn main() -> anyhow::Result<()> {
             let task = config
                 .find_task(&name)
                 .ok_or_else(|| anyhow::anyhow!("Task '{}' not found in config", name))?;
+
+            info!(
+                "Watch: copying file {} → {}",
+                &task.source.display(),
+                &task.target.display()
+            );
 
             let mut params = sync::SyncParameters::from(task);
             params.checksum = checksum; // 新增此行

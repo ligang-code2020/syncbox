@@ -3,7 +3,7 @@
 name = "task"
 source = "/Users/lg/Desktop/syncbox/source"
 target = "/Users/lg/Desktop/syncbox/target"
-exclude = [".log"]
+exclude = [".secret"]
 delete_extra = true
 delete_extra_exclude = [".DS_Store"]
 
