@@ -1,5 +1,5 @@
 [package]
-name = "syncbox"
+name = "sync-box"
 version = "0.1.1"
 edition = "2024"
 authors = ["LiGang<ligang13874843373@gmail.com>"]
@@ -7,14 +7,14 @@ description = "一个类似 rsync 的文件同步工具"
 homepage = "https://github.com/ligang-code2020/syncbox"
 license = "MIT"
 readme = "README.md"
-keywords = ["sync", "file-sync", "rsync", "syncbox"]
+keywords = ["sync", "file-sync", "rsync", "sync-box"]
 categories = ["command-line-utilities"]  # 分类（参考 crates.io 分类列表）
 
 
 
 
 [[bin]]
-name = "syncbox"
+name = "sync-box"
 path = "src/main.rs"
 
 [dependencies]
