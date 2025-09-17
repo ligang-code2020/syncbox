@@ -16,22 +16,37 @@
 
 ## 📦 安装方式
 
-### 从源码编译
+### 方式 1：直接下载预编译二进制（推荐，无需 Rust 环境）
+从 GitHub Releases 下载对应平台的压缩包，解压后即可使用
 
 ```bash
-# 从源码编译
-git clone https://github.com/yourusername/syncbox.git
-cd syncbox
-cargo build --release
-# 可执行文件将位于 target/release/syncbox
+# 以 Linux 为例，下载并解压
+curl -L https://github.com/ligang-code2020/syncbox/releases/download/v0.1.0/syncbox-linux-x86_64.tar.gz -o syncbox-linux.tar.gz
+tar -zxvf syncbox-linux.tar.gz
 
-# 从本地路径安装
-cargo install --path .
+# 赋予执行权限并全局安装
+chmod +x syncbox
+sudo mv syncbox /usr/local/bin/
 ```
 
-### 预编译版本
-从项目的 GitHub Releases 页面下载对应平台的预编译二进制文件。
+### 方式 2：通过 Cargo 安装（Rust 开发者，直接拉取 crates.io 版本）
+`cargo install syncbox `
 
+### 方式 3：从源码编译（需 Rust 环境，适合自定义修改）
+若需基于源码二次开发或验证最新代码，可通过 Git 克隆仓库后编译：
+
+```bash
+# 1. 克隆源码仓库
+git clone https://github.com/ligang-code2020/syncbox.git
+cd syncbox
+
+# 2. 编译 Release 版本（优化编译，生成的二进制体积更小、运行更快）
+cargo build --release
+
+# 3. 编译产物路径：target/release/syncbox（可直接执行或手动移动到 PATH 目录）
+# 手动全局安装示例：
+sudo mv target/release/syncbox /usr/local/bin/
+```
 
 ## 🚀 使用指南
 ### 直接同步两个目录
