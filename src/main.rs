@@ -4,10 +4,11 @@ use tracing::{info};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    infra::logging::init_logger();
-    info!("SyncBox Starting...");
-
     let args = cli::Args::parse();
+    infra::logging::init_logger();
+
+
+
     match args.command {
         // ============ SYNC 模式 ============
         cli::Command::Sync {

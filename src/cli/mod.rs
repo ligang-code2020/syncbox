@@ -37,37 +37,38 @@ pub enum Command {
         detail: bool,
     },
     Run {
+        /// 任务名
         name: String,
-        /// Config file path (optional, default: ./syncbox.toml)
+        /// 配置文件路径 (默认: ./syncbox.toml)
         #[arg(long, default_value = "syncbox.toml")]
         config: PathBuf,
-
+        /// 试运行模式（不实际写入）
         #[arg(long)]
         dry_run: bool,
-
+        /// 使用校验和比较文件内容（而非仅修改时间/大小）
         #[arg(long)]
         checksum: bool,
-
+        /// 显示详细操作列表（哪些文件被同步/删除）
         #[arg(long)]
         detail: bool,
     },
 
     Watch {
+        /// 任务名
         name: String,
-
+        /// 配置文件路径 (默认: ./syncbox.toml)
         #[arg(long, default_value = "syncbox.toml")]
         config: PathBuf,
-
-        /// Watch delay in milliseconds (default: 500ms)
+        /// 监听延时 (默认: 500ms)
         #[arg(long, default_value = "500")]
         delay: u64,
-
+        /// 试运行模式（不实际写入）
         #[arg(long)]
         dry_run: bool,
-
+        /// 使用校验和比较文件内容（而非仅修改时间/大小）
         #[arg(long)]
         checksum: bool,
-
+        /// 显示详细操作列表（哪些文件被同步/删除）
         #[arg(long)]
         detail: bool,
     },
