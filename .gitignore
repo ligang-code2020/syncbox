@@ -9,5 +9,3 @@ Cargo.toml.orig  # 避免 cargo publish 生成的临时文件被上传
 .idea/     # 忽略 JetBrains 系列 IDE（如 CLion）的配置目录（可选）
 .vscode/   # 忽略 VS Code 的配置目录（可选，若用 VS Code 开发建议加上）
 
-# 避免 .gitignore 自身被误上传（你的原配置已包含，保留）
-.gitignore
