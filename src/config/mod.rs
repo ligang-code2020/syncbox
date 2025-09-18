@@ -20,7 +20,7 @@ pub struct SyncTask {
     pub source: PathBuf,
 
     // 目标目录路径
-    pub target: PathBuf,
+    pub target: String,
 
     // 可选：要排除的文件或目录（支持 glob 模式）
     #[serde(default)]

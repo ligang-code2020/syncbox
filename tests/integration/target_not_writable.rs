@@ -1,7 +1,7 @@
 // tests/integration/target_not_writable.rs
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use syncbox::sync::{SyncOptions, SyncParameters};
+use syncbox::sync::{SyncParameters};
 use syncbox::sync::sync_directories;
 use tempfile::TempDir;
 
@@ -24,7 +24,7 @@ async fn test_target_directory_not_writable() {
 
     let params = SyncParameters{
         source,
-        target,
+        target:target.display().to_string(),
         dry_run: false,
         checksum: false,
         excludes: vec![],

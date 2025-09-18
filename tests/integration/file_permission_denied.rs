@@ -21,7 +21,7 @@ async fn test_source_file_permission_denied() {
 
     let params = SyncParameters {
         source,
-        target,
+        target: target.display().to_string(),
         dry_run: false,
         checksum: false,
         excludes: vec![],

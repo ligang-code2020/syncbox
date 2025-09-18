@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::path::PathBuf;
+use clap::builder::ValueParser;
 
 #[derive(Parser)]
 #[command(name = "syncbox")]
@@ -16,7 +17,8 @@ pub enum Command {
         /// 源目录路径
         source: PathBuf,
         /// 目标目录路径
-        target: PathBuf,
+        #[arg(value_parser = ValueParser::string())]
+        target: String,
         /// 试运行模式（不实际写入）
         #[arg(long)]
         dry_run: bool,

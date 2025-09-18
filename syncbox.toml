@@ -1,13 +1,13 @@
 # syncbox.toml
 [[sync]]
 name = "task"
-source = "/xx/xx/xxx/syncbox/source"
-target = "/xx/xx/xxx/syncbox/target"
+source = "/Users/lg/Desktop/syncbox/source"
+target = "/Users/lg/Desktop/syncbox/target"
 exclude = [".secret"]
 delete_extra = true
 delete_extra_exclude = [".DS_Store"]
 
 
-
+# cargo run -- sync /Users/lg/Desktop/syncbox/source user@host:/remote/path --dry-run
 
 

@@ -1,6 +1,6 @@
 use std::fs;
 use syncbox::sync::sync_directories;
-use syncbox::sync::{SyncOptions, SyncParameters};
+use syncbox::sync::{ SyncParameters};
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -20,7 +20,7 @@ async fn test_sync_success() {
 
     let params = SyncParameters {
         source,
-        target: target.clone(),
+        target: target.display().to_string().clone(),
         dry_run: false,
         checksum: false,
         excludes: vec![],

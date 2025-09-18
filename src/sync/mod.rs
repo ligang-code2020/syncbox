@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::{debug, error, info, warn};
 use chrono::Local;
+use anyhow::Result;
+mod remote;
 
 // ==============================================
 // 公共类型定义（对外暴露）
@@ -60,7 +62,7 @@ pub struct SyncParameters {
     /// 源目录
     pub source: PathBuf,
     /// 目标目录
-    pub target: PathBuf,
+    pub target: String,
     /// 试运行模式
     pub dry_run: bool,
     /// 是否使用校验和比较
@@ -108,7 +110,7 @@ impl From<&cli::Command> for SyncParameters {
                 // 这里只是占位，实际会在加载配置后覆盖
                 Self {
                     source: PathBuf::new(),
-                    target: PathBuf::new(),
+                    target: String::new(),
                     dry_run: *dry_run,
                     checksum: *checksum,
                     excludes: Vec::new(),
@@ -126,7 +128,7 @@ impl From<&cli::Command> for SyncParameters {
                 detail,
             } => Self {
                 source: PathBuf::new(),
-                target: PathBuf::new(),
+                target: String::new(),
                 dry_run: *dry_run,
                 checksum: *checksum,
                 excludes: Vec::new(),
@@ -351,6 +353,8 @@ mod filter {
 
 mod file_ops {
     use super::*;
+    use super::parse_remote_target;
+    use super::RemoteTarget;
     /// 复制文件（自动创建目标目录）
     ///
     /// # 参数
@@ -363,7 +367,27 @@ mod file_ops {
     ///
     /// # 注意
     /// 使用 `tokio::fs::copy`，保留元信息（如修改时间）。
-    pub async fn copy_file(source: &Path, target: &Path, dry_run: bool) -> std::io::Result<()> {
+    pub async fn copy_file(source: &Path, target: &str, dry_run: bool) -> std::io::Result<()> {
+        if dry_run {
+            return Ok(());
+        }
+
+        // 判断是否为远程路径
+        if let Some(remote) = parse_remote_target(target) {
+            // 👉 调用远程上传（占位，下一步实现真实逻辑）
+            copy_file_remote(source, &remote, dry_run).await.map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, format!("Remote copy failed: {}", e))
+            })
+        } else {
+            // 👉 调用本地复制（原逻辑抽成独立函数）
+            copy_file_local(source, Path::new(target), dry_run).await
+        }
+    }
+
+    // ==============================================
+    // 本地文件复制（原 copy_file 逻辑抽离）
+    // ==============================================
+    async fn copy_file_local(source: &Path, target: &Path, dry_run: bool) -> std::io::Result<()> {
         if dry_run {
             return Ok(());
         }
@@ -376,6 +400,13 @@ mod file_ops {
         // 执行复制
         tokio::fs::copy(source, target).await?;
         Ok(())
+    }
+
+    // ==============================================
+    // 远程文件上传（占位实现，下一步填真实 SFTP 逻辑）
+    // ==============================================
+    pub async fn copy_file_remote(local_path: &Path, remote: &RemoteTarget, dry_run: bool) -> Result<()> {
+        remote::upload_file(local_path, remote, dry_run).await
     }
 
     pub fn compute_blake3_hash(path: &Path) -> std::io::Result<[u8; 32]> {
@@ -395,7 +426,7 @@ mod file_ops {
 
     pub async fn delete_extra_files(
         source: &PathBuf,
-        target: &PathBuf,
+        target: &Path,
         dry_run: bool,
         exclude: &[String],
         delete_exclude: &[String],
@@ -462,9 +493,9 @@ mod file_ops {
     /// - `Ok(Vec<PathBuf>)`: 可以安全删除的文件列表
 
     pub async fn scan_target_for_deletion(
-        current: &PathBuf,
-        target_root: &PathBuf,
-        source_root: &PathBuf,
+        current: &Path,
+        target_root: &Path,
+        source_root: &Path,
         source_files: &std::collections::HashSet<String>,
         exclude: &[String],
         delete_exclude: &[String],
@@ -575,7 +606,8 @@ mod sync_logic {
                 .path
                 .strip_prefix(&params.source)
                 .expect("File not under source root");
-            let target_path = params.target.join(relative);
+            let target_base = Path::new(&params.target);
+            let target_path = target_base.join(relative);
             let target_info = if target_path.exists() {
                 FileInfo::from_path(&target_path, options.checksum).ok()
             } else {
@@ -592,7 +624,7 @@ mod sync_logic {
         if options.delete_extra {
             let (deleted, would_delete, delete_errors) = delete_extra_files(
                 &params.source,
-                &params.target,
+                Path::new(&params.target),
                 options.dry_run,
                 &options.excludes,
                 &options.delete_excludes,
@@ -636,7 +668,7 @@ mod sync_logic {
             let pb = create_progress_bar(total_sync_size);
 
             for (source_info, target_path) in &sync_queue {
-                match copy_file(&source_info.path, target_path, options.dry_run).await {
+                match copy_file(&source_info.path, target_path.to_str().unwrap(), options.dry_run).await {
                     Ok(()) => {
                         report.copied.push(source_info.path.clone());
                         processed_size += source_info.size;
@@ -769,7 +801,7 @@ mod watcher {
         info!(
             "Started watching: {} → {}",
             params.source.display(),
-            params.target.display()
+            &params.target
         );
 
         // 6. 主事件循环：接收文件变化事件并处理
@@ -826,7 +858,7 @@ mod watcher {
                     error!(
                         error = ?e,
                         source = %params.source.display(),
-                        target = %params.target.display(),
+                        target = %params.target,
                         "Sync failed during watch"
                     );
                     total_report
@@ -986,3 +1018,5 @@ pub use report::{SyncReport, print_report};
 pub use scanner::scan_directory;
 pub use sync_logic::{SyncOptions, sync_directories};
 pub use watcher::watch_task;
+pub use remote::parse_remote_target;
+pub use remote::RemoteTarget;

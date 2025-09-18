@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
             info!(
                 "Sync: copying file {} → {}",
                 source.display(),
-                target.display()
+                target
             );
             sync::sync_directories(&params).await?;
         }
@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
             info!(
                 "Run: copying file {} → {}",
                 &task.source.display(),
-                &task.target.display()
+                &task.target
             );
 
             let mut params = sync::SyncParameters::from(task);
@@ -95,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
             info!(
                 "Watch: copying file {} → {}",
                 &task.source.display(),
-                &task.target.display()
+                &task.target
             );
 
             let mut params = sync::SyncParameters::from(task);
