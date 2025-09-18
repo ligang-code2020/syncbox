@@ -11,21 +11,7 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="a463654d-c605-4fff-99ee-a695aaa10352" name="更改" comment="">
-      <change afterPath="$PROJECT_DIR$/src/sync/remote.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/cli/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/cli/mod.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/config/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/config/mod.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/sync/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/sync/mod.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/syncbox.toml" beforeDir="false" afterPath="$PROJECT_DIR$/syncbox.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/integration/file_permission_denied.rs" beforeDir="false" afterPath="$PROJECT_DIR$/tests/integration/file_permission_denied.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/integration/source_not_found.rs" beforeDir="false" afterPath="$PROJECT_DIR$/tests/integration/source_not_found.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/integration/sync_success.rs" beforeDir="false" afterPath="$PROJECT_DIR$/tests/integration/sync_success.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/integration/target_not_writable.rs" beforeDir="false" afterPath="$PROJECT_DIR$/tests/integration/target_not_writable.rs" afterDir="false" />
-    </list>
+    <list default="true" id="a463654d-c605-4fff-99ee-a695aaa10352" name="更改" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -211,7 +197,7 @@
       <workItem from="1756278501496" duration="7722000" />
       <workItem from="1756287653354" duration="57796000" />
       <workItem from="1756692585320" duration="211704000" />
-      <workItem from="1758177391249" duration="1709000" />
+      <workItem from="1758177391249" duration="1895000" />
     </task>
     <servers />
   </component>
