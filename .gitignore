@@ -1,3 +1,11 @@
+# Rust 项目核心忽略项（保留你原有的 /target，补充依赖缓存）
 /target
-.DS_Store
-.gitignore
+Cargo.lock  # Rust 项目默认建议忽略，避免不同环境依赖版本冲突（可选，若需固定依赖可保留）
+Cargo.toml.orig  # 避免 cargo publish 生成的临时文件被上传
+
+# 系统/编辑器生成的文件（重点处理 .DS_Store）
+.DS_Store  # 忽略 macOS 生成的隐藏文件（你的原配置已包含，保留）
+*.swp      # 忽略 Vim 编辑器的临时文件（可选，根据你的编辑器补充）
+.idea/     # 忽略 JetBrains 系列 IDE（如 CLion）的配置目录（可选）
+.vscode/   # 忽略 VS Code 的配置目录（可选，若用 VS Code 开发建议加上）
+

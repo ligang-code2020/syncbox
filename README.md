@@ -16,22 +16,37 @@
 
 ## 📦 安装方式
 
-### 从源码编译
+### 方式 1：直接下载预编译二进制（推荐，无需 Rust 环境）
+从 GitHub Releases 下载对应平台的压缩包，解压后即可使用
 
 ```bash
-# 从源码编译
-git clone https://github.com/yourusername/syncbox.git
-cd syncbox
-cargo build --release
-# 可执行文件将位于 target/release/syncbox
+# 以 Linux 为例，下载并解压
+curl -L https://github.com/ligang-code2020/syncbox/releases/download/v0.1.0/syncbox-linux-x86_64.tar.gz -o syncbox-linux.tar.gz
+tar -zxvf syncbox-linux.tar.gz
 
-# 从本地路径安装
-cargo install --path .
+# 赋予执行权限并全局安装
+chmod +x syncbox
+sudo mv syncbox /usr/local/bin/
 ```
 
-### 预编译版本
-从项目的 GitHub Releases 页面下载对应平台的预编译二进制文件。
+### 方式 2：通过 Cargo 安装（Rust 开发者，直接拉取 crates.io 版本）
+`cargo install syncbox `
 
+### 方式 3：从源码编译（需 Rust 环境，适合自定义修改）
+若需基于源码二次开发或验证最新代码，可通过 Git 克隆仓库后编译：
+
+```bash
+# 1. 克隆源码仓库
+git clone https://github.com/ligang-code2020/syncbox.git
+cd syncbox
+
+# 2. 编译 Release 版本（优化编译，生成的二进制体积更小、运行更快）
+cargo build --release
+
+# 3. 编译产物路径：target/release/syncbox（可直接执行或手动移动到 PATH 目录）
+# 手动全局安装示例：
+sudo mv target/release/syncbox /usr/local/bin/
+```
 
 ## 🚀 使用指南
 ### 直接同步两个目录
@@ -126,6 +141,36 @@ delete_extra_exclude = [".DS_Store"]
 * 同步核心：实现目录扫描、文件过滤、同步逻辑
 * 监听模块：监控文件系统变化并触发同步
 * 基础设施：错误处理和日志系统
+
+### 📅 开发计划
+#### 当前版本 (v0.1.0)
+* ✅ 支持本地目录间的文件同步
+* ✅ 实现基于配置文件的同步任务管理
+* ✅ 提供实时文件监听与自动同步功能
+* ✅ 支持多种同步策略（修改时间比对 / 哈希校验）
+* ✅ 完善的排除规则与安全操作机制
+
+
+#### 未来版本规划
+#### v0.2.0 - 远程同步基础
+* 支持通过 SSH 协议进行远程目录同步
+* 实现基本的远程认证机制（密码 / 密钥）
+* 远程文件差异计算优化
+
+#### v0.3.0 - 远程同步增强
+* 支持 SFTP 协议同步
+* 增加断点续传功能
+* 远程同步进度显示与速度限制
+
+#### v0.4.0 - 高级功能
+* 增量同步算法优化
+* 同步历史记录与版本回溯
+* 多节点同步拓扑支持
+* 长期目标
+* 分布式文件系统支持
+* 端到端加密传输
+* 图形化界面客户端
+* 跨平台同步冲突解决机制
 
 ### 许可证
 本项目采用 MIT 许可证，详情参见 `LICENSE` 文件。
