@@ -3,11 +3,13 @@
 // 作用：判断一个字符串是否为远程路径，并解析为结构体
 // ==============================================
 
+
 use crate::utils::{create_progress_bar, format_file_size};
 use anyhow::{anyhow, Result};
 use std::path::Path;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
+use std::io::{self, Write};
 
 /// 检查系统是否安装了 sshpass
 fn check_sshpass_installed() -> bool {
@@ -17,6 +19,33 @@ fn check_sshpass_installed() -> bool {
         .map(|s| s.success())
         .unwrap_or(false)
 }
+
+pub fn test_ssh_keypair(remote_user: &str, remote_host: &str, remote_port: u16) -> bool {
+    // 构建SSH命令，增加更多容错参数
+    let output = std::process::Command::new("ssh")
+        .arg("-o")
+        .arg("StrictHostKeyChecking=accept-new")  // 自动接受新主机密钥
+        .arg("-o")
+        .arg("ConnectTimeout=5")                 // 延长超时时间
+        .arg("-o")
+        .arg("BatchMode=yes")                    // 非交互模式
+        .arg("-o")
+        .arg("PasswordAuthentication=no")        // 禁用密码认证（强制密钥）
+        .arg("-p")
+        .arg(remote_port.to_string())
+        .arg(format!("{}@{}", remote_user, remote_host))
+        .arg("exit 0")
+        .output();
+
+    match output {
+        Ok(output) => {
+            // 同时检查退出码和错误输出（避免因其他错误导致误判）
+            output.status.success() && output.stderr.is_empty()
+        }
+        Err(_) => false,
+    }
+}
+
 /// 构建带认证的SSH命令
 fn build_ssh_command(
     remote: &RemoteTarget,
@@ -27,7 +56,10 @@ fn build_ssh_command(
         // 密码认证：使用sshpass
         if !check_sshpass_installed() {
             return Err(anyhow::anyhow!(
-                "需要安装 sshpass 以使用密码认证，请执行：\n  - Ubuntu/Debian: sudo apt install sshpass\n  - macOS: brew install sshpass"
+                "需要安装 sshpass 以使用密码认证，请执行：\n\
+            - Ubuntu/Debian: sudo apt install sshpass\n\
+            - macOS: brew install sshpass\n\
+            - Windows: 通过 WSL 或 Cygwin 安装",
             ));
         }
         let mut cmd = Command::new("sshpass");
@@ -63,6 +95,70 @@ pub struct RemoteTarget {
     pub port: u16,
     pub path: String,
     pub ssh_key_path: Option<String>,
+}
+
+impl RemoteTarget {
+    /// 解析目标字符串并处理认证（通用入口）
+    pub fn resolve_and_auth(target: &str, password: Option<String>) -> Result<(Self, Option<String>)> {
+        // 解析远程目标
+        let remote = parse_remote_target(target)
+            .ok_or_else(|| anyhow::anyhow!("无效的远程目标格式: {}", target))?;
+
+        // 处理认证逻辑（复用之前实现的 handle_auth）
+        let ssh_password = remote.handle_auth(password)?;
+
+        Ok((remote, ssh_password))
+    }
+
+
+    /// 处理远程目标的认证逻辑（密码获取、免密验证）
+    pub fn handle_auth(&self, password: Option<String>) -> Result<Option<String>> {
+        // 优先从环境变量获取密码
+        let ssh_password = std::env::var("SYNCBOX_SSH_PASSWORD").ok().or(password);
+
+        if ssh_password.is_none() {
+            // 无密码时验证免密登录
+            self.verify_keypair_auth()?;
+        }
+
+        Ok(ssh_password)
+    }
+
+    /// 验证免密登录
+    fn verify_keypair_auth(&self) -> Result<()> {
+        eprintln!("\n未检测到SSH密码（环境变量或命令参数）");
+        eprint!("你是否已配置SSH免密登录？(y/n) ");
+        io::stdout().flush()?; // 确保提示语及时输出
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+
+        if input == "y" || input == "yes" {
+            eprintln!("正在验证免密登录...");
+            if !test_ssh_keypair(&self.user, &self.host, self.port) {
+                eprintln!("\n❌ 免密登录验证失败！");
+                eprintln!("请手动验证免密是否生效：");
+                eprintln!("  ssh -p {} {}@{} exit", self.port, self.user, self.host);
+                eprintln!("配置方法：");
+                eprintln!("  1. 生成密钥对：ssh-keygen");
+                eprintln!("  2. 上传公钥：ssh-copy-id -p {} {}@{}", self.port, self.user, self.host);
+                return Err(anyhow!("免密配置无效"));
+            }
+            eprintln!("✅ 免密登录验证通过");
+        } else {
+            eprintln!("\n请先配置免密登录或提供密码：");
+            eprintln!("方法1（推荐）：配置免密");
+            eprintln!("  ssh-copy-id -p {} {}@{}", self.port, self.user, self.host);
+            eprintln!("方法2：使用环境变量提供密码");
+            eprintln!("  export SYNCBOX_SSH_PASSWORD=你的密码");
+            eprintln!("方法3：命令行指定密码");
+            eprintln!("  --password 你的密码");
+            return Err(anyhow!("未配置免密且未提供密码"));
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -110,10 +206,7 @@ async fn create_remote_directory(remote: &RemoteTarget, password: Option<&str>) 
     Ok(())
 }
 
-pub async fn scan_remote_files(
-    remote: &RemoteTarget,
-    password: Option<&str>,
-) -> Result<Vec<RemoteFile>> {
+pub async fn scan_remote_files(remote: &RemoteTarget, password: Option<&str>) -> Result<Vec<RemoteFile>> {
     // 先尝试创建远程目录
     create_remote_directory(remote, password).await?;
     let remote_dir = &remote.path;
@@ -201,12 +294,7 @@ pub fn parse_remote_target(target: &str) -> Option<RemoteTarget> {
     })
 }
 
-pub async fn upload_file(
-    local_path: &Path,
-    remote: &RemoteTarget,
-    dry_run: bool,
-    ssh_password: Option<&str>, // 密码认证：可选密码
-) -> Result<()> {
+pub async fn upload_file(local_path: &Path, remote: &RemoteTarget, dry_run: bool, ssh_password: Option<&str>) -> Result<()> {
     // 1. 验证本地文件是否存在
     if !local_path.exists() {
         return Err(anyhow!("❌ 本地文件不存在: {}", local_path.display()));
@@ -252,8 +340,11 @@ pub async fn upload_file(
     let mut command = if let Some(pwd) = ssh_password {
         // 密码认证：使用sshpass包裹scp
         if !check_sshpass_installed() {
-            return Err(anyhow!(
-                "❌ 需要安装sshpass以使用密码认证:\n  - Ubuntu/Debian: sudo apt install sshpass\n  - macOS: brew install sshpass"
+            return Err(anyhow::anyhow!(
+                "需要安装 sshpass 以使用密码认证，请执行：\n\
+            - Ubuntu/Debian: sudo apt install sshpass\n\
+            - macOS: brew install sshpass\n\
+            - Windows: 通过 WSL 或 Cygwin 安装",
             ));
         }
         let mut cmd = Command::new("sshpass");
@@ -348,7 +439,10 @@ pub async fn download_file(
         // 密码认证：使用sshpass
         if !check_sshpass_installed() {
             return Err(anyhow::anyhow!(
-                "需要安装 sshpass 以使用密码认证，请执行：\n  - Ubuntu/Debian: sudo apt install sshpass\n  - macOS: brew install sshpass"
+                "需要安装 sshpass 以使用密码认证，请执行：\n\
+            - Ubuntu/Debian: sudo apt install sshpass\n\
+            - macOS: brew install sshpass\n\
+            - Windows: 通过 WSL 或 Cygwin 安装",
             ));
         }
         let mut cmd = Command::new("sshpass");

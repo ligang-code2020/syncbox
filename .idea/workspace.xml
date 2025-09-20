@@ -11,7 +11,13 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="a463654d-c605-4fff-99ee-a695aaa10352" name="更改" comment="" />
+    <list default="true" id="a463654d-c605-4fff-99ee-a695aaa10352" name="更改" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/sync/remote.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/sync/remote.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/utils/check.rs" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/utils/mod.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/utils/mod.rs" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -28,7 +34,7 @@
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
-        <entry key="$PROJECT_DIR$" value="master" />
+        <entry key="$PROJECT_DIR$" value="daily/0.1.0" />
       </map>
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
@@ -161,6 +167,7 @@
       </method>
     </configuration>
     <configuration name="Test utils::format::tests::test_format_file_size" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
+      <option name="buildProfileId" value="test" />
       <option name="command" value="test --package syncbox --lib utils::format::tests::test_format_file_size -- --exact" />
       <option name="workingDirectory" value="file://$PROJECT_DIR$" />
       <envs />
@@ -181,6 +188,9 @@
       <list>
         <item itemvalue="Cargo.Test utils::format::tests::test_format_file_size" />
         <item itemvalue="Cargo.Test format::tests" />
+        <item itemvalue="Cargo.Test utils::format::tests::test_format_file_size" />
+        <item itemvalue="Cargo.Test format::tests" />
+        <item itemvalue="Cargo.Test utils::format::tests::test_format_file_size" />
       </list>
     </recent_temporary>
   </component>
@@ -198,6 +208,8 @@
       <workItem from="1756287653354" duration="57796000" />
       <workItem from="1756692585320" duration="211704000" />
       <workItem from="1758177391249" duration="1895000" />
+      <workItem from="1758179429639" duration="32383000" />
+      <workItem from="1758358326167" duration="2142000" />
     </task>
     <servers />
   </component>
