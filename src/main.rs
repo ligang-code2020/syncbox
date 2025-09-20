@@ -1,13 +1,14 @@
 use clap::Parser;
+use syncbox::utils::check_sshpass;
 use syncbox::{cli, infra, sync};
-use tracing::{info};
+use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    check_sshpass()?;
+
     let args = cli::Args::parse();
     infra::logging::init_logger();
-
-
 
     match args.command {
         // ============ SYNC 模式 ============
@@ -19,8 +20,14 @@ async fn main() -> anyhow::Result<()> {
             delete,
             exclude,
             delete_exclude,
-            detail
+            detail,
+            password,
         } => {
+            // 优先从环境变量获取密码，CLI 参数作为备选
+            let ssh_password = std::env::var("SYNCBOX_SSH_PASSWORD").ok().or(password);
+
+            println!("ssh_password:{:?}",ssh_password);
+
             let params = sync::SyncParameters {
                 source: source.clone(),
                 target: target.clone(),
@@ -29,14 +36,11 @@ async fn main() -> anyhow::Result<()> {
                 excludes: exclude.clone(),
                 delete_extra: delete,
                 delete_excludes: delete_exclude.clone(),
-                detail
+                detail,
+                ssh_password,
             };
 
-            info!(
-                "Sync: copying file {} → {}",
-                source.display(),
-                target
-            );
+            info!("Sync: copying file {} → {}", source.display(), target);
             sync::sync_directories(&params).await?;
         }
 
@@ -46,8 +50,10 @@ async fn main() -> anyhow::Result<()> {
             config,
             dry_run,
             checksum, // 新增
-            detail
+            detail,
+            password,
         } => {
+            let ssh_password = std::env::var("SYNCBOX_SSH_PASSWORD").ok().or(password);
 
             // 1. 加载配置文件
             let config = syncbox::config::Config::from_file(&config)
@@ -68,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
             params.dry_run = dry_run;
             params.checksum = checksum;
             params.detail = detail;
+            params.ssh_password = ssh_password;
 
             // 调用统一核心逻辑
             sync::sync_directories(&params).await?;
@@ -80,10 +87,10 @@ async fn main() -> anyhow::Result<()> {
             dry_run,
             delay,
             checksum,
-            detail
+            detail,
+            password,
         } => {
-
-
+            let ssh_password = std::env::var("SYNCBOX_SSH_PASSWORD").ok().or(password);
 
             let config = syncbox::config::Config::from_file(&config)
                 .map_err(|e| anyhow::anyhow!("Config error: {}", e))?;
@@ -102,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
             params.checksum = checksum; // 新增此行
             params.detail = detail;
             params.dry_run = dry_run;
+            params.ssh_password = ssh_password;
             sync::watch_task(&params, delay).await?;
         }
     }

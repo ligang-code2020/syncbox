@@ -75,6 +75,8 @@ pub struct SyncParameters {
     pub delete_excludes: Vec<String>,
     /// 是否显示详细操作列表
     pub detail: bool,
+    /// SSH 密码（可选，从 CLI 或环境变量获取）
+    pub ssh_password: Option<String>,
 }
 
 // 实现从不同来源转换为统一参数
@@ -90,6 +92,7 @@ impl From<&cli::Command> for SyncParameters {
                 exclude,
                 delete_exclude,
                 detail,
+                password,
             } => Self {
                 source: source.clone(),
                 target: target.clone(),
@@ -99,6 +102,7 @@ impl From<&cli::Command> for SyncParameters {
                 delete_extra: *delete,
                 delete_excludes: delete_exclude.clone(),
                 detail: *detail,
+                ssh_password: password.clone(),
             },
             cli::Command::Run {
                 name: _,
@@ -106,6 +110,7 @@ impl From<&cli::Command> for SyncParameters {
                 dry_run,
                 checksum,
                 detail,
+                password,
             } => {
                 // 这里只是占位，实际会在加载配置后覆盖
                 Self {
@@ -117,6 +122,7 @@ impl From<&cli::Command> for SyncParameters {
                     delete_extra: false,
                     delete_excludes: Vec::new(),
                     detail: *detail,
+                    ssh_password: password.clone(),
                 }
             }
             cli::Command::Watch {
@@ -126,6 +132,7 @@ impl From<&cli::Command> for SyncParameters {
                 checksum,
                 dry_run,
                 detail,
+                password,
             } => Self {
                 source: PathBuf::new(),
                 target: String::new(),
@@ -135,6 +142,7 @@ impl From<&cli::Command> for SyncParameters {
                 delete_extra: false,
                 delete_excludes: Vec::new(),
                 detail: *detail,
+                ssh_password: password.clone(),
             },
         }
     }
@@ -152,6 +160,7 @@ impl From<&config::SyncTask> for SyncParameters {
             delete_extra: task.delete_extra,
             delete_excludes: task.delete_extra_exclude.clone(),
             detail: false,
+            ssh_password: None,
         }
     }
 }
@@ -272,7 +281,7 @@ mod scanner {
             "扫描远程目录: {}@{}:{}",
             remote.user, remote.host, remote.path
         );
-        let remote_files = remote::scan_remote_files(remote)
+        let remote_files = remote::scan_remote_files(remote, params.ssh_password.as_deref())
             .await
             .map_err(SyncError::from)?;
         let remote_files_map: HashMap<String, remote::RemoteFile> = remote_files
@@ -305,9 +314,15 @@ mod scanner {
                     host: remote.host.clone(),
                     port: remote.port.clone(),
                     path: format!("{}/{}", remote.path, rel_path),
+                    ssh_key_path: remote.ssh_key_path.clone(),
                 };
 
-                match remote::upload_file(&local_info.path, &remote_file_target, params.dry_run)
+                match remote::upload_file(
+                    &local_info.path,
+                    &remote_file_target,
+                    params.dry_run,
+                    params.ssh_password.as_deref(),
+                )
                     .await
                 {
                     Ok(_) => {
@@ -482,7 +497,7 @@ mod file_ops {
     ///
     /// # 注意
     /// 使用 `tokio::fs::copy`，保留元信息（如修改时间）。
-    pub async fn copy_file(source: &Path, target: &str, dry_run: bool) -> std::io::Result<()> {
+    pub async fn copy_file(source: &Path, target: &str, dry_run: bool, ssh_password: Option<&str>) -> std::io::Result<()> {
         if dry_run {
             return Ok(());
         }
@@ -490,7 +505,7 @@ mod file_ops {
         // 判断是否为远程路径
         if let Some(remote) = parse_remote_target(target) {
             // 👉 调用远程上传（占位，下一步实现真实逻辑）
-            copy_file_remote(source, &remote, dry_run)
+            copy_file_remote(source, &remote, dry_run, ssh_password)
                 .await
                 .map_err(|e| {
                     std::io::Error::new(
@@ -529,8 +544,9 @@ mod file_ops {
         local_path: &Path,
         remote: &RemoteTarget,
         dry_run: bool,
+        ssh_password: Option<&str>, // 添加密码参数
     ) -> Result<()> {
-        remote::upload_file(local_path, remote, dry_run).await
+        remote::upload_file(local_path, remote, dry_run, ssh_password).await
     }
 
     pub fn compute_blake3_hash(path: &Path) -> std::io::Result<[u8; 32]> {
@@ -579,7 +595,7 @@ mod file_ops {
             delete_exclude,
             &mut to_delete,
         )
-        .await?;
+            .await?;
 
         // 收集删除结果
         let mut deleted = Vec::new();
@@ -673,6 +689,7 @@ mod sync_logic {
         pub checksum: bool,
         pub delete_extra: bool,
         pub delete_excludes: Vec<String>,
+        pub ssh_password: Option<String>,  // 新增：存储密码
     }
 
     impl Default for SyncOptions {
@@ -683,6 +700,7 @@ mod sync_logic {
                 checksum: false,
                 delete_extra: false,
                 delete_excludes: vec![],
+                ssh_password: None,
             }
         }
     }
@@ -720,6 +738,7 @@ mod sync_logic {
                 checksum: params.checksum,
                 delete_extra: params.delete_extra,
                 delete_excludes: params.delete_excludes.clone(),
+                ssh_password:params.ssh_password.clone(),
             };
 
             let mut report = SyncReport::default(); // 初始化报告
@@ -760,7 +779,7 @@ mod sync_logic {
                     &options.excludes,
                     &options.delete_excludes,
                 )
-                .await?;
+                    .await?;
 
                 report.deleted = deleted;
                 report.would_delete = would_delete;
@@ -770,8 +789,8 @@ mod sync_logic {
             // 检查是否有需要同步的文件
             if sync_queue.is_empty()
                 && (!options.delete_extra
-                    || report.would_delete.is_empty()
-                    || report.deleted.is_empty())
+                || report.would_delete.is_empty()
+                || report.deleted.is_empty())
             {
                 // 没有文件需要同步，直接返回
                 print_report(
@@ -803,8 +822,9 @@ mod sync_logic {
                         &source_info.path,
                         target_path.to_str().unwrap(),
                         options.dry_run,
+                        options.ssh_password.as_deref()
                     )
-                    .await
+                        .await
                     {
                         Ok(()) => {
                             report.copied.push(source_info.path.clone());
@@ -923,7 +943,7 @@ mod watcher {
                     }
                 }
             })
-            .map_err(|e| anyhow::anyhow!("Failed to create file watcher: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to create file watcher: {}", e))?;
 
         // 5. 开始监听源目录（递归监听所有子目录）
         watcher
@@ -1063,7 +1083,7 @@ mod report {
             report.copied.len().to_formatted_string(&Locale::en),
             format_file_size(total_sync_size)
         )
-        .unwrap();
+            .unwrap();
 
         if detail && !report.copied.is_empty() {
             writeln!(output, "{}同步的文件：", if dry_run { "待" } else { "" }).unwrap();
@@ -1079,7 +1099,7 @@ mod report {
                 "同步错误数: {}",
                 report.errors.len().to_formatted_string(&Locale::en)
             )
-            .unwrap();
+                .unwrap();
         }
 
         if detail && !report.errors.is_empty() {
@@ -1104,7 +1124,7 @@ mod report {
                         "待删除文件数: {}",
                         report.would_delete.len().to_formatted_string(&Locale::en)
                     )
-                    .unwrap();
+                        .unwrap();
                     if detail && !report.would_delete.is_empty() {
                         writeln!(output, "待删除的文件：").unwrap();
                         for path in &report.would_delete {
@@ -1117,7 +1137,7 @@ mod report {
                         "已删除文件数: {}",
                         report.deleted.len().to_formatted_string(&Locale::en)
                     )
-                    .unwrap();
+                        .unwrap();
                     if detail && !report.deleted.is_empty() {
                         writeln!(output, "已删除的文件：").unwrap();
                         for path in &report.deleted {
@@ -1131,7 +1151,7 @@ mod report {
                             "删除错误数: {}",
                             report.delete_errors.len().to_formatted_string(&Locale::en)
                         )
-                        .unwrap();
+                            .unwrap();
                         if detail {
                             writeln!(output, "删除错误详情：").unwrap();
                             for (path, err) in &report.delete_errors {

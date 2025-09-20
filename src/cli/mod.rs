@@ -37,6 +37,9 @@ pub enum Command {
         /// 显示详细操作列表（哪些文件被同步/删除）
         #[arg(long)]
         detail: bool,
+        /// 是否需要密码远程同步(ssh)
+        #[arg(long, hide = true)] //
+        password: Option<String>,
     },
     Run {
         /// 任务名
@@ -53,6 +56,9 @@ pub enum Command {
         /// 显示详细操作列表（哪些文件被同步/删除）
         #[arg(long)]
         detail: bool,
+        /// 是否需要密码远程同步(ssh)
+        #[arg(long, hide = true)] //
+        password: Option<String>,
     },
 
     Watch {
@@ -73,5 +79,8 @@ pub enum Command {
         /// 显示详细操作列表（哪些文件被同步/删除）
         #[arg(long)]
         detail: bool,
+        /// 是否需要密码远程同步(ssh)
+        #[arg(long, hide = true)] //
+        password: Option<String>,
     },
 }
