@@ -10,5 +10,5 @@ pub mod check;
 // 可选：重新导出常用函数，方便调用
 pub use format::{format_file_size};
 pub use progress::create_progress_bar;
-pub use check::{check_sshpass};
+pub use check::{check_sshpass,test_ssh_keypair};
 

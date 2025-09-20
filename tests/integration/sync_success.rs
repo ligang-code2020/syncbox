@@ -27,6 +27,7 @@ async fn test_sync_success() {
         delete_extra: false,
         delete_excludes: vec![],
         detail: false,
+        ssh_password: None,
     };
 
     // 3. 执行同步

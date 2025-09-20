@@ -20,6 +20,7 @@ async fn test_source_directory_not_found() {
         delete_extra: false,
         delete_excludes: vec![],
         detail: false,
+        ssh_password: None,
     };
 
     let result = sync_directories(&params).await;

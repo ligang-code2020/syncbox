@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::{debug, error, info, warn};
-mod remote;
+pub mod remote;
 
 // ==============================================
 // 公共类型定义（对外暴露）

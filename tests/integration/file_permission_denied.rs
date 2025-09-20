@@ -28,6 +28,7 @@ async fn test_source_file_permission_denied() {
         delete_extra: false,
         delete_excludes: vec![],
         detail: false,
+        ssh_password:None
     };
 
     // 尝试同步

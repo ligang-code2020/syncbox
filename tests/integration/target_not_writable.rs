@@ -31,6 +31,7 @@ async fn test_target_directory_not_writable() {
         delete_extra: false,
         delete_excludes: vec![],
         detail: false,
+        ssh_password: None,
     };
 
     // 尝试同步
