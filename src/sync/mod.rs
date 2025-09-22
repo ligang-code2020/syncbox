@@ -257,7 +257,7 @@ mod scanner {
 
     pub async fn sync_to_remote(
         params: &SyncParameters,
-        remote: &remote::RemoteTarget,
+        remote: &RemoteTarget,
     ) -> Result<SyncReport> {
         let mut report = SyncReport::default(); // 初始化报告
         // 1. 扫描本地文件
@@ -297,68 +297,54 @@ mod scanner {
                 Some(remote) => {
                     // 检查是否需要更新（基于修改时间+大小 或 校验和）
                     if params.checksum {
-                        // 校验和模式：需计算远程文件哈希（暂未实现，可先跳过或简化）
-                        // local_info.blake3_hash.as_ref()
-                        //     != Some(&compute_remote_file_hash(remote, rel_path).await?)
+                        // 校验和模式占位
                         false
                     } else {
-                        // 默认模式：比较大小和修改时间
-                        !remote.is_same_as_local(&local_info.path)
+                        // 比较大小和修改时间
+                        local_info.size != remote.size || {
+                            // 转换本地SystemTime为Unix时间戳（秒）
+                            let local_mtime = local_info.mtime
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs() as i64)
+                                .unwrap_or(0);
+                            local_mtime > remote.mtime
+                        }
                     }
                 }
             };
 
 
             if need_upload {
-                let remote_file_target = RemoteTarget {
-                    user: remote.user.clone(),
-                    host: remote.host.clone(),
-                    port: remote.port.clone(),
-                    path: format!("{}/{}", remote.path, rel_path),
-                    ssh_key_path: remote.ssh_key_path.clone(),
-                };
-
-                match remote::upload_file(
-                    &local_info.path,
-                    &remote_file_target,
-                    params.dry_run,
-                    params.ssh_password.as_deref(),
-                )
-                    .await
-                {
-                    Ok(_) => {
-                        report.uploaded += 1;
-                        if params.detail {
-                            info!("上传文件: {}", rel_path);
-                        }
-                    }
-                    Err(e) => {
-                        // report.errors.push((local_info, e.to_string()));
-                        error!("上传失败 {}: {}", rel_path, e);
-                    }
+                if params.detail {
+                    info!("[UPLOAD] {}", rel_path);
                 }
-            } else {
-                report.skipped += 1;
+                if !params.dry_run {
+                    // 执行上传操作
+                    remote::upload_file(
+                        &local_info.path,
+                        remote,
+                        params.dry_run,
+                        params.ssh_password.as_deref()
+                    ).await?;
+                    report.uploaded += 1;
+                    report.bytes_transferred += local_info.size;
+                }
             }
         }
 
         // 4. 处理需要删除的远程文件（远程有、本地无，且允许删除）
         if params.delete_extra {
-            for (rel_path, _) in &remote_files_map {
-                if !local_files_map.contains_key(rel_path)
-                    && !should_exclude_path(rel_path, &params.delete_excludes)
-                {
-                    match remote::delete_remote_file(remote, rel_path, params.dry_run).await {
-                        Ok(_) => {
-                            report.deleted.push(rel_path.parse()?);
-                            if params.detail {
-                                info!("删除远程文件: {}", rel_path);
-                            }
-                        }
-                        Err(e) => {
-                            // report.failed += 1;
-                            error!("删除失败 {}: {}", rel_path, e);
-                        }
+            for (rel_path, remote_file) in &remote_files_map {
+                if !local_files_map.contains_key(rel_path) &&
+                    !should_exclude(Path::new(rel_path), &params.source, &params.delete_excludes) {
+
+                    if params.detail {
+                        info!("[DELETE] {}", rel_path);
+                    }
+                    if !params.dry_run {
+                        // 执行删除操作
+                        remote::delete_remote_file(remote, rel_path, params.ssh_password.as_deref()).await?;
+                        // report.deleted += 1;
                     }
                 }
             }
@@ -1052,6 +1038,7 @@ mod report {
         pub uploaded: usize,
         pub downloaded: usize,
         pub skipped: usize,
+        pub bytes_transferred: u64,
     }
 
     /// 统一打印同步和删除的结果

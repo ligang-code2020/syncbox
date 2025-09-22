@@ -498,53 +498,23 @@ pub async fn download_file(
 
 pub async fn delete_remote_file(
     remote: &RemoteTarget,
-    file_path: &str, // 远程文件的相对路径
-    dry_run: bool,
+    path: &str,
+    password: Option<&str>,
 ) -> Result<()> {
-    let full_remote_path = format!("{}/{}", remote.path, file_path);
-    if dry_run {
-        println!(
-            "INFO 🗑️ [模拟] 删除远程文件: user={} host={} path={}",
-            remote.user, remote.host, full_remote_path
-        );
-        return Ok(());
-    }
-
-    println!(
-        "🗑️ 正在删除远程文件: {}@{}:{}",
-        remote.user, remote.host, full_remote_path
+    let full_path = format!(
+        "{}/{}",
+        remote.path,
+        shell_escape::escape(path.into())
     );
+    let cmd = format!("rm -f {}", full_path);
 
-    // 构造 ssh 删除命令（使用 rm -f 避免文件不存在时报错）
-    let cmd = format!(
-        "rm -f {}",
-        shell_escape::escape(full_remote_path.clone().into())
-    );
-
-    let output = Command::new("ssh")
-        .arg("-i") // 添加密钥参数
-        .arg("~/.ssh/id_rsa") // 你的密钥路径
-        .arg("-o")
-        .arg("StrictHostKeyChecking=accept-new")
-        .arg("-o")
-        .arg("ConnectTimeout=10")
-        .arg("-p")
-        .arg(remote.port.to_string())
-        .arg(format!("{}@{}", remote.user, remote.host))
-        .arg(&cmd)
-        .output()
-        .await?;
+    let mut command = build_ssh_command(remote, password)?;
+    let output = command.arg(&cmd).output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("❌ 删除远程文件失败:\n{}", stderr));
+        return Err(anyhow::anyhow!("❌ 删除远程文件失败: {} - {}", path, stderr));
     }
-
-    println!(
-        "✅ 删除成功: {}@{}:{}",
-        remote.user, remote.host, &full_remote_path
-    );
-
     Ok(())
 }
 
