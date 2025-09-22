@@ -3,13 +3,13 @@
 // 作用：判断一个字符串是否为远程路径，并解析为结构体
 // ==============================================
 
-
 use crate::utils::{create_progress_bar, format_file_size};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
-use std::io::{self, Write};
+use tracing::{error, info, warn};
 
 /// 检查系统是否安装了 sshpass
 fn check_sshpass_installed() -> bool {
@@ -24,13 +24,13 @@ pub fn test_ssh_keypair(remote_user: &str, remote_host: &str, remote_port: u16) 
     // 构建SSH命令，增加更多容错参数
     let output = std::process::Command::new("ssh")
         .arg("-o")
-        .arg("StrictHostKeyChecking=accept-new")  // 自动接受新主机密钥
+        .arg("StrictHostKeyChecking=accept-new") // 自动接受新主机密钥
         .arg("-o")
-        .arg("ConnectTimeout=5")                 // 延长超时时间
+        .arg("ConnectTimeout=5") // 延长超时时间
         .arg("-o")
-        .arg("BatchMode=yes")                    // 非交互模式
+        .arg("BatchMode=yes") // 非交互模式
         .arg("-o")
-        .arg("PasswordAuthentication=no")        // 禁用密码认证（强制密钥）
+        .arg("PasswordAuthentication=no") // 禁用密码认证（强制密钥）
         .arg("-p")
         .arg(remote_port.to_string())
         .arg(format!("{}@{}", remote_user, remote_host))
@@ -99,7 +99,10 @@ pub struct RemoteTarget {
 
 impl RemoteTarget {
     /// 解析目标字符串并处理认证（通用入口）
-    pub fn resolve_and_auth(target: &str, password: Option<String>) -> Result<(Self, Option<String>)> {
+    pub fn resolve_and_auth(
+        target: &str,
+        password: Option<String>,
+    ) -> Result<(Self, Option<String>)> {
         // 解析远程目标
         let remote = parse_remote_target(target)
             .ok_or_else(|| anyhow::anyhow!("无效的远程目标格式: {}", target))?;
@@ -109,7 +112,6 @@ impl RemoteTarget {
 
         Ok((remote, ssh_password))
     }
-
 
     /// 处理远程目标的认证逻辑（密码获取、免密验证）
     pub fn handle_auth(&self, password: Option<String>) -> Result<Option<String>> {
@@ -126,8 +128,8 @@ impl RemoteTarget {
 
     /// 验证免密登录
     fn verify_keypair_auth(&self) -> Result<()> {
-        eprintln!("\n未检测到SSH密码（环境变量或命令参数）");
-        eprint!("你是否已配置SSH免密登录？(y/n) ");
+        warn!("未检测到SSH密码（环境变量或命令参数）");
+        warn!("你是否已配置SSH免密登录？(y/n)");
         io::stdout().flush()?; // 确保提示语及时输出
 
         let mut input = String::new();
@@ -135,25 +137,21 @@ impl RemoteTarget {
         let input = input.trim().to_lowercase();
 
         if input == "y" || input == "yes" {
-            eprintln!("正在验证免密登录...");
             if !test_ssh_keypair(&self.user, &self.host, self.port) {
-                eprintln!("\n❌ 免密登录验证失败！");
-                eprintln!("请手动验证免密是否生效：");
-                eprintln!("  ssh -p {} {}@{} exit", self.port, self.user, self.host);
-                eprintln!("配置方法：");
-                eprintln!("  1. 生成密钥对：ssh-keygen");
-                eprintln!("  2. 上传公钥：ssh-copy-id -p {} {}@{}", self.port, self.user, self.host);
+                error!("免密登录验证失败！\n\
+                        请手动验证免密是否生效 \n\
+                        - ssh -p {} {}@{}", self.port, self.user, self.host
+                );
                 return Err(anyhow!("免密配置无效"));
             }
-            eprintln!("✅ 免密登录验证通过");
+            info!("免密登录验证通过");
         } else {
-            eprintln!("\n请先配置免密登录或提供密码：");
-            eprintln!("方法1（推荐）：配置免密");
-            eprintln!("  ssh-copy-id -p {} {}@{}", self.port, self.user, self.host);
-            eprintln!("方法2：使用环境变量提供密码");
-            eprintln!("  export SYNCBOX_SSH_PASSWORD=你的密码");
-            eprintln!("方法3：命令行指定密码");
-            eprintln!("  --password 你的密码");
+            warn!(
+                "请先配置免密登录或提供密码：\n\
+                 - 方法1（推荐）：手动配置ssh免密\n\
+                 - 方法2：使用环境变量提供密码：export SYNCBOX_SSH_PASSWORD=你的密码\n\
+                 - 方法3：命令行指定密码：--password 你的密码"
+            );
             return Err(anyhow!("未配置免密且未提供密码"));
         }
 
@@ -206,7 +204,10 @@ async fn create_remote_directory(remote: &RemoteTarget, password: Option<&str>) 
     Ok(())
 }
 
-pub async fn scan_remote_files(remote: &RemoteTarget, password: Option<&str>) -> Result<Vec<RemoteFile>> {
+pub async fn scan_remote_files(
+    remote: &RemoteTarget,
+    password: Option<&str>,
+) -> Result<Vec<RemoteFile>> {
     // 先尝试创建远程目录
     create_remote_directory(remote, password).await?;
     let remote_dir = &remote.path;
@@ -294,7 +295,12 @@ pub fn parse_remote_target(target: &str) -> Option<RemoteTarget> {
     })
 }
 
-pub async fn upload_file(local_path: &Path, remote: &RemoteTarget, dry_run: bool, ssh_password: Option<&str>) -> Result<()> {
+pub async fn upload_file(
+    local_path: &Path,
+    remote: &RemoteTarget,
+    dry_run: bool,
+    ssh_password: Option<&str>,
+) -> Result<()> {
     // 1. 验证本地文件是否存在
     if !local_path.exists() {
         return Err(anyhow!("❌ 本地文件不存在: {}", local_path.display()));
@@ -373,14 +379,13 @@ pub async fn upload_file(local_path: &Path, remote: &RemoteTarget, dry_run: bool
     command.arg(local_path).arg(&remote_path);
 
     // 10. 执行上传命令
-    let output = command.output().await
+    let output = command
+        .output()
+        .await
         .map_err(|e| anyhow!("❌ 上传命令执行失败: {}", e))?;
 
     // 11. 更新进度条（完成）
-    pb.finish_with_message(format!(
-        "上传完成: {}",
-        format_file_size(file_size)
-    ));
+    pb.finish_with_message(format!("上传完成: {}", format_file_size(file_size)));
 
     // 12. 处理命令执行结果
     if !output.status.success() {
@@ -389,7 +394,10 @@ pub async fn upload_file(local_path: &Path, remote: &RemoteTarget, dry_run: bool
         let error_msg = if stderr.contains("Permission denied") {
             "权限不足，请检查远程目录权限或认证信息".to_string()
         } else if stderr.contains("Connection refused") {
-            format!("连接被拒绝，请检查主机{}和端口{}是否可用", remote.host, remote.port)
+            format!(
+                "连接被拒绝，请检查主机{}和端口{}是否可用",
+                remote.host, remote.port
+            )
         } else if stderr.contains("No such file or directory") {
             "远程目录不存在，请先创建目录".to_string()
         } else {
