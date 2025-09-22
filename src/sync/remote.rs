@@ -7,7 +7,7 @@ use crate::utils::{create_progress_bar, format_file_size};
 use anyhow::{Result, anyhow};
 use std::io::{self, Write};
 use std::path::Path;
-use std::process::Command as StdCommand;
+use std::process::{Command as StdCommand, Stdio};
 use tokio::process::Command;
 use tracing::{error, info, warn};
 
@@ -15,6 +15,8 @@ use tracing::{error, info, warn};
 fn check_sshpass_installed() -> bool {
     StdCommand::new("which")
         .arg("sshpass")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)

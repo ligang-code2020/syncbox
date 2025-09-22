@@ -308,8 +308,9 @@ mod scanner {
                 }
             };
 
+
             if need_upload {
-                let remote_file_target = remote::RemoteTarget {
+                let remote_file_target = RemoteTarget {
                     user: remote.user.clone(),
                     host: remote.host.clone(),
                     port: remote.port.clone(),
