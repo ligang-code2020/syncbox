@@ -255,104 +255,6 @@ mod scanner {
         Ok(files)
     }
 
-    pub async fn sync_to_remote(
-        params: &SyncParameters,
-        remote: &RemoteTarget,
-    ) -> Result<SyncReport> {
-        let mut report = SyncReport::default(); // 初始化报告
-        // 1. 扫描本地文件
-        info!("扫描本地目录: {}", params.source.display());
-        let local_files = scan_directory(&params.source, &params.excludes, params.checksum)?;
-        let local_files_map: HashMap<String, FileInfo> = local_files
-            .into_iter()
-            .map(|info| {
-                let rel_path = info
-                    .path
-                    .strip_prefix(&params.source)
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned();
-                (rel_path, info)
-            })
-            .collect();
-
-        // 2. 扫描远程文件
-        info!(
-            "扫描远程目录: {}@{}:{}",
-            remote.user, remote.host, remote.path
-        );
-        let remote_files = remote::scan_remote_files(remote, params.ssh_password.as_deref())
-            .await
-            .map_err(SyncError::from)?;
-        let remote_files_map: HashMap<String, remote::RemoteFile> = remote_files
-            .into_iter()
-            .map(|f| (f.path.clone(), f))
-            .collect();
-
-        // 3. 处理需要上传的文件（本地有、远程无，或内容不同）
-        for (rel_path, local_info) in &local_files_map {
-            let remote_file = remote_files_map.get(rel_path);
-            let need_upload = match remote_file {
-                None => true, // 远程不存在，需上传
-                Some(remote) => {
-                    // 检查是否需要更新（基于修改时间+大小 或 校验和）
-                    if params.checksum {
-                        // 校验和模式占位
-                        false
-                    } else {
-                        // 比较大小和修改时间
-                        local_info.size != remote.size || {
-                            // 转换本地SystemTime为Unix时间戳（秒）
-                            let local_mtime = local_info.mtime
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_secs() as i64)
-                                .unwrap_or(0);
-                            local_mtime > remote.mtime
-                        }
-                    }
-                }
-            };
-
-
-            if need_upload {
-                if params.detail {
-                    info!("[UPLOAD] {}", rel_path);
-                }
-                if !params.dry_run {
-                    // 执行上传操作
-                    remote::upload_file(
-                        &local_info.path,
-                        remote,
-                        params.dry_run,
-                        params.ssh_password.as_deref()
-                    ).await?;
-                    report.uploaded += 1;
-                    report.bytes_transferred += local_info.size;
-                }
-            }
-        }
-
-        // 4. 处理需要删除的远程文件（远程有、本地无，且允许删除）
-        if params.delete_extra {
-            for (rel_path, remote_file) in &remote_files_map {
-                if !local_files_map.contains_key(rel_path) &&
-                    !should_exclude(Path::new(rel_path), &params.source, &params.delete_excludes) {
-
-                    if params.detail {
-                        info!("[DELETE] {}", rel_path);
-                    }
-                    if !params.dry_run {
-                        // 执行删除操作
-                        remote::delete_remote_file(remote, rel_path, params.ssh_password.as_deref()).await?;
-                        // report.deleted += 1;
-                    }
-                }
-            }
-        }
-
-        Ok(report)
-    }
-
     fn should_exclude_path(path: &str, patterns: &[String]) -> bool {
         use glob::Pattern;
         patterns.iter().any(|p| {
@@ -484,7 +386,12 @@ mod file_ops {
     ///
     /// # 注意
     /// 使用 `tokio::fs::copy`，保留元信息（如修改时间）。
-    pub async fn copy_file(source: &Path, target: &str, dry_run: bool, ssh_password: Option<&str>) -> std::io::Result<()> {
+    pub async fn copy_file(
+        source: &Path,
+        target: &str,
+        dry_run: bool,
+        ssh_password: Option<&str>,
+    ) -> std::io::Result<()> {
         if dry_run {
             return Ok(());
         }
@@ -582,7 +489,7 @@ mod file_ops {
             delete_exclude,
             &mut to_delete,
         )
-            .await?;
+        .await?;
 
         // 收集删除结果
         let mut deleted = Vec::new();
@@ -669,6 +576,7 @@ mod file_ops {
 
 mod sync_logic {
     use super::*;
+    use std::collections::HashMap;
 
     pub struct SyncOptions {
         pub dry_run: bool,
@@ -676,7 +584,7 @@ mod sync_logic {
         pub checksum: bool,
         pub delete_extra: bool,
         pub delete_excludes: Vec<String>,
-        pub ssh_password: Option<String>,  // 新增：存储密码
+        pub ssh_password: Option<String>, // 新增：存储密码
     }
 
     impl Default for SyncOptions {
@@ -692,21 +600,14 @@ mod sync_logic {
         }
     }
 
-    /// 执行一次完整的目录同步
-    ///
+    /// # 同步逻辑
     /// # 策略
     /// 1. 扫描源目录
     /// 2. 扫描目标目录
     /// 3. 复制新/更新的文件
     /// 4. （可选）删除目标目录中多余的文件
-    ///
     /// # 参数
-    /// - `source`: 源目录
-    /// - `target`: 目标目录
-    /// - `dry_run`: 是否为试运行（不实际修改文件）
-    /// - `excludes`: 排除规则
-    /// - `delete_extra`: 是否删除目标目录中多余的文件
-    ///
+    /// - `params`: SyncParameters
     /// # 返回
     /// - `Ok(SyncReport)`: 同步结果报告
     /// - `Err(_)`: 致命错误（如源目录不存在）
@@ -718,147 +619,277 @@ mod sync_logic {
             // 远程同步逻辑：本地 → 远程
             sync_to_remote(params, &remote).await
         } else {
-            // 本地同步逻辑（已有的本地同步代码）
-            let options = SyncOptions {
-                dry_run: params.dry_run,
-                excludes: params.excludes.clone(),
-                checksum: params.checksum,
-                delete_extra: params.delete_extra,
-                delete_excludes: params.delete_excludes.clone(),
-                ssh_password:params.ssh_password.clone(),
-            };
+            // 本地同步逻辑：本地 → 本地
+            sync_to_local(params).await
+        }
+    }
 
-            let mut report = SyncReport::default(); // 初始化报告
+    /// 远程同步逻辑
+    pub async fn sync_to_remote(
+        params: &SyncParameters,
+        remote: &RemoteTarget,
+    ) -> Result<SyncReport> {
+        let mut report = SyncReport::default(); // 初始化报告
+        let options = SyncOptions {
+            dry_run: params.dry_run,
+            excludes: params.excludes.clone(),
+            checksum: params.checksum,
+            delete_extra: params.delete_extra,
+            delete_excludes: params.delete_excludes.clone(),
+            ssh_password: params.ssh_password.clone(),
+        };
 
-            // 1. 扫描源目录获取所有文件
-            let source_files = scan_directory(&params.source, &options.excludes, options.checksum)
-                .map_err(|e| anyhow::anyhow!("Failed to scan source directory -> {}", e))?;
+        // 1. 扫描本地文件
+        // info!("扫描本地目录: {}", params.source.display());
+        let local_files = scan_directory(&params.source, &params.excludes, options.checksum)
+            .map_err(|e| anyhow::anyhow!("Failed to scan source directory -> {}", e))?;
 
-            // 2. 预扫描：筛选出需要同步的文件，并计算总大小
-            let mut sync_queue = Vec::new();
-            let mut total_sync_size: u64 = 0;
+        let local_files_count = local_files.len();
+        let mut total_sync_size: u64 = 0;
 
-            for source_info in &source_files {
-                let relative = source_info
+        let local_files_map: HashMap<String, FileInfo> = local_files
+            .into_iter()
+            .map(|info| {
+                let rel_path = info
                     .path
                     .strip_prefix(&params.source)
-                    .expect("File not under source root");
-                let target_base = Path::new(&params.target);
-                let target_path = target_base.join(relative);
-                let target_info = if target_path.exists() {
-                    FileInfo::from_path(&target_path, options.checksum).ok()
-                } else {
-                    None
-                };
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                (rel_path, info)
+            })
+            .collect();
 
-                // 判断是否需要同步，只将需要同步的文件加入队列
-                if should_sync(source_info, target_info.as_ref(), options.checksum) {
-                    sync_queue.push((source_info.clone(), target_path));
-                    total_sync_size += source_info.size;
-                }
-            }
+        // 2. 扫描远程文件
+        // info!("扫描远程目录: {}@{}:{}",remote.user, remote.host, remote.path);
+        let remote_files = remote::scan_remote_files(remote, options.ssh_password.as_deref())
+            .await
+            .map_err(SyncError::from)?;
+        let remote_files_map: HashMap<String, remote::RemoteFile> = remote_files
+            .into_iter()
+            .map(|f| (f.path.clone(), f))
+            .collect();
 
-            if options.delete_extra {
-                let (deleted, would_delete, delete_errors) = delete_extra_files(
-                    &params.source,
-                    Path::new(&params.target),
-                    options.dry_run,
-                    &options.excludes,
-                    &options.delete_excludes,
-                )
-                    .await?;
-
-                report.deleted = deleted;
-                report.would_delete = would_delete;
-                report.delete_errors = delete_errors;
-            }
-
-            // 检查是否有需要同步的文件
-            if sync_queue.is_empty()
-                && (!options.delete_extra
-                || report.would_delete.is_empty()
-                || report.deleted.is_empty())
-            {
-                // 没有文件需要同步，直接返回
-                print_report(
-                    true,
-                    &report,
-                    options.dry_run,
-                    options.delete_extra,
-                    source_files.len(),
-                    total_sync_size,
-                    params.detail,
-                );
-                return Ok(report);
-            }
-
-            // 4. 处理同步队列
-            let mut processed_size = 0;
-
-            if options.dry_run {
-                // Dry-run 模式：列出所有将被同步的文件
-                for (source_info, _target_path) in &sync_queue {
-                    report.copied.push(source_info.path.clone());
-                }
-            } else {
-                // 正常模式：初始化进度条
-                let pb = create_progress_bar(total_sync_size);
-
-                for (source_info, target_path) in &sync_queue {
-                    match copy_file(
-                        &source_info.path,
-                        target_path.to_str().unwrap(),
-                        options.dry_run,
-                        options.ssh_password.as_deref()
-                    )
-                        .await
-                    {
-                        Ok(()) => {
-                            report.copied.push(source_info.path.clone());
-                            processed_size += source_info.size;
-                            pb.set_position(processed_size);
-                            debug!(
-                                source = %source_info.path.display(),
-                                target = %target_path.display(),
-                                "File copied"
-                            );
-                        }
-                        Err(e) => {
-                            warn!(
-                                error = ?e,
-                                source = %source_info.path.display(),
-                                target = %target_path.display(),
-                                "Failed to copy file"
-                            );
-                            // failed_to_copy += 1;
-                            report.errors.push((target_path.clone(), e.to_string()));
-                            processed_size += source_info.size;
-                            pb.set_position(processed_size);
+        // 3. 处理需要上传的文件（本地有、远程无，或内容不同）
+        for (rel_path, local_info) in &local_files_map {
+            let remote_file = remote_files_map.get(rel_path);
+            let need_upload = match remote_file {
+                None => true, // 远程不存在，需上传
+                Some(remote) => {
+                    // 检查是否需要更新（基于修改时间+大小 或 校验和）
+                    if options.checksum {
+                        // 校验和模式占位
+                        false
+                    } else {
+                        // 比较大小和修改时间
+                        local_info.size != remote.size || {
+                            // 转换本地SystemTime为Unix时间戳（秒）
+                            let local_mtime = local_info
+                                .mtime
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs() as i64)
+                                .unwrap_or(0);
+                            local_mtime > remote.mtime
                         }
                     }
                 }
+            };
 
-                pb.finish_with_message("File sync completed");
+            if need_upload {
+                total_sync_size+=local_info.size;
+                if !options.dry_run {
+                    // 执行上传操作
+                    remote::upload_file(
+                        &local_info.path,
+                        remote,
+                        options.dry_run,
+                        options.ssh_password.as_deref(),
+                    )
+                    .await?;
+                    report.copied.push(local_info.path.clone());
+                } else {
+                    report.copied.push(local_info.path.clone());
+                }
             }
+        }
 
-            if report.errors.len() > 0 {
-                warn!(count = report.errors.len(), "Some files failed to copy");
-                anyhow::bail!("Failed to copy {} files", report.errors.len());
+        // 4. 处理需要删除的远程文件（远程有、本地无，且允许删除）
+        if options.delete_extra {
+            for (rel_path, remote_file) in &remote_files_map {
+                if !local_files_map.contains_key(rel_path)
+                    && !should_exclude(Path::new(rel_path), &params.source, &params.delete_excludes)
+                {
+                    if !options.dry_run {
+                        // 执行删除操作
+                        remote::delete_remote_file(
+                            remote,
+                            rel_path,
+                            params.ssh_password.as_deref(),
+                        )
+                        .await?;
+                        report.deleted.push(rel_path.parse()?);
+                    } else {
+                        report.would_delete.push(rel_path.parse()?);
+                    }
+                }
             }
+        }
 
-            // 5. 统一输出整合后的结果
+        // 5. 统一输出整合后的结果
+        print_report(
+            false,
+            &report,
+            options.dry_run,
+            options.delete_extra, // 新增：是否启用删除功能
+            local_files_count,
+            total_sync_size,
+            params.detail,
+        );
+
+        Ok(report)
+    }
+
+    /// 本地同步逻辑
+    pub async fn sync_to_local(params: &SyncParameters) -> Result<SyncReport> {
+        let mut report = SyncReport::default();
+
+        let options = SyncOptions {
+            dry_run: params.dry_run,
+            excludes: params.excludes.clone(),
+            checksum: params.checksum,
+            delete_extra: params.delete_extra,
+            delete_excludes: params.delete_excludes.clone(),
+            ssh_password: params.ssh_password.clone(),
+        };
+
+        // 1. 扫描源目录获取所有文件
+        let source_files = scan_directory(&params.source, &options.excludes, options.checksum)
+            .map_err(|e| anyhow::anyhow!("Failed to scan source directory -> {}", e))?;
+
+        // 2. 预扫描：筛选出需要同步的文件，并计算总大小
+        let mut sync_queue = Vec::new();
+        let mut total_sync_size: u64 = 0;
+
+        for source_info in &source_files {
+            let relative = source_info
+                .path
+                .strip_prefix(&params.source)
+                .expect("File not under source root");
+            let target_base = Path::new(&params.target);
+            let target_path = target_base.join(relative);
+            let target_info = if target_path.exists() {
+                FileInfo::from_path(&target_path, options.checksum).ok()
+            } else {
+                None
+            };
+
+            // 判断是否需要同步，只将需要同步的文件加入队列
+            if should_sync(source_info, target_info.as_ref(), options.checksum) {
+                sync_queue.push((source_info.clone(), target_path));
+                total_sync_size += source_info.size;
+            }
+        }
+
+        if options.delete_extra {
+            let (deleted, would_delete, delete_errors) = delete_extra_files(
+                &params.source,
+                Path::new(&params.target),
+                options.dry_run,
+                &options.excludes,
+                &options.delete_excludes,
+            )
+            .await?;
+
+            report.deleted = deleted;
+            report.would_delete = would_delete;
+            report.delete_errors = delete_errors;
+        }
+
+        // 检查是否有需要同步的文件
+        if sync_queue.is_empty()
+            && (!options.delete_extra
+                || report.would_delete.is_empty()
+                || report.deleted.is_empty())
+        {
+            // 没有文件需要同步，直接返回
             print_report(
-                false,
+                true,
                 &report,
                 options.dry_run,
-                options.delete_extra, // 新增：是否启用删除功能
+                options.delete_extra,
                 source_files.len(),
                 total_sync_size,
                 params.detail,
             );
-
-            Ok(report)
+            return Ok(report);
         }
+
+        // 4. 处理同步队列
+        let mut processed_size = 0;
+
+        if options.dry_run {
+            // Dry-run 模式：列出所有将被同步的文件
+            for (source_info, _target_path) in &sync_queue {
+                report.copied.push(source_info.path.clone());
+            }
+        } else {
+            // 正常模式：初始化进度条
+            let pb = create_progress_bar(total_sync_size);
+
+            for (source_info, target_path) in &sync_queue {
+                match copy_file(
+                    &source_info.path,
+                    target_path.to_str().unwrap(),
+                    options.dry_run,
+                    options.ssh_password.as_deref(),
+                )
+                .await
+                {
+                    Ok(()) => {
+                        report.copied.push(source_info.path.clone());
+                        processed_size += source_info.size;
+                        pb.set_position(processed_size);
+                        debug!(
+                            source = %source_info.path.display(),
+                            target = %target_path.display(),
+                            "File copied"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            error = ?e,
+                            source = %source_info.path.display(),
+                            target = %target_path.display(),
+                            "Failed to copy file"
+                        );
+                        // failed_to_copy += 1;
+                        report.errors.push((target_path.clone(), e.to_string()));
+                        processed_size += source_info.size;
+                        pb.set_position(processed_size);
+                    }
+                }
+            }
+
+            pb.finish_with_message("File sync completed");
+        }
+
+        if report.errors.len() > 0 {
+            warn!(count = report.errors.len(), "Some files failed to copy");
+            anyhow::bail!("Failed to copy {} files", report.errors.len());
+        }
+
+        // 5. 统一输出整合后的结果
+        print_report(
+            false,
+            &report,
+            options.dry_run,
+            options.delete_extra, // 新增：是否启用删除功能
+            source_files.len(),
+            total_sync_size,
+            params.detail,
+        );
+
+        Ok(report)
     }
 }
 
@@ -930,7 +961,7 @@ mod watcher {
                     }
                 }
             })
-                .map_err(|e| anyhow::anyhow!("Failed to create file watcher: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create file watcher: {}", e))?;
 
         // 5. 开始监听源目录（递归监听所有子目录）
         watcher
@@ -1035,10 +1066,6 @@ mod report {
         pub deleted: Vec<PathBuf>,                 // 成功删除的文件
         pub would_delete: Vec<PathBuf>,            // dry-run模式下待删除的文件
         pub delete_errors: Vec<(PathBuf, String)>, // 删除错误
-        pub uploaded: usize,
-        pub downloaded: usize,
-        pub skipped: usize,
-        pub bytes_transferred: u64,
     }
 
     /// 统一打印同步和删除的结果
@@ -1071,7 +1098,7 @@ mod report {
             report.copied.len().to_formatted_string(&Locale::en),
             format_file_size(total_sync_size)
         )
-            .unwrap();
+        .unwrap();
 
         if detail && !report.copied.is_empty() {
             writeln!(output, "{}同步的文件：", if dry_run { "待" } else { "" }).unwrap();
@@ -1087,7 +1114,7 @@ mod report {
                 "同步错误数: {}",
                 report.errors.len().to_formatted_string(&Locale::en)
             )
-                .unwrap();
+            .unwrap();
         }
 
         if detail && !report.errors.is_empty() {
@@ -1112,7 +1139,7 @@ mod report {
                         "待删除文件数: {}",
                         report.would_delete.len().to_formatted_string(&Locale::en)
                     )
-                        .unwrap();
+                    .unwrap();
                     if detail && !report.would_delete.is_empty() {
                         writeln!(output, "待删除的文件：").unwrap();
                         for path in &report.would_delete {
@@ -1125,7 +1152,7 @@ mod report {
                         "已删除文件数: {}",
                         report.deleted.len().to_formatted_string(&Locale::en)
                     )
-                        .unwrap();
+                    .unwrap();
                     if detail && !report.deleted.is_empty() {
                         writeln!(output, "已删除的文件：").unwrap();
                         for path in &report.deleted {
@@ -1139,7 +1166,7 @@ mod report {
                             "删除错误数: {}",
                             report.delete_errors.len().to_formatted_string(&Locale::en)
                         )
-                            .unwrap();
+                        .unwrap();
                         if detail {
                             writeln!(output, "删除错误详情：").unwrap();
                             for (path, err) in &report.delete_errors {
@@ -1166,6 +1193,6 @@ pub use filter::{should_exclude, should_sync};
 pub use remote::RemoteTarget;
 pub use remote::parse_remote_target;
 pub use report::{SyncReport, print_report};
-pub use scanner::{scan_directory, sync_to_remote};
-pub use sync_logic::{SyncOptions, sync_directories};
+pub use scanner::scan_directory;
+pub use sync_logic::{SyncOptions, sync_directories, sync_to_local, sync_to_remote};
 pub use watcher::watch_task;
