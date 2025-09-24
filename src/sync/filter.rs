@@ -1,5 +1,5 @@
 use super::types::{FileInfo};
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::sync::Arc;
 use glob::Pattern;
 use tracing::debug;
@@ -18,8 +18,7 @@ static EXCLUDE_MATCHER_CACHE: Lazy<Mutex<HashMap<String, Arc<ExcludeMatcher>>>> 
 
 #[derive(Debug, Clone)]
 pub struct ExcludeMatcher {
-    patterns: Vec<Pattern>,
-    exclude_strings: Vec<String>, // 用于调试/日志
+    patterns: Vec<Pattern>
 }
 
 impl ExcludeMatcher {
@@ -34,8 +33,7 @@ impl ExcludeMatcher {
         debug!(patterns = ?exclude_patterns, "Compiled {} exclude patterns", compiled.len());
 
         Ok(Self {
-            patterns: compiled,
-            exclude_strings: exclude_patterns.to_vec(),
+            patterns: compiled
         })
     }
 
@@ -108,7 +106,7 @@ pub fn should_exclude(path: &Path, root: &Path, exclude_patterns: &[String]) -> 
                 Err(e) => {
                     tracing::error!(error = ?e, patterns = ?exclude_patterns, "Failed to compile exclude patterns");
                     // 如果编译失败，退化为不排斥（安全策略）
-                    Arc::new(ExcludeMatcher { patterns: vec![], exclude_strings: vec![] })
+                    Arc::new(ExcludeMatcher { patterns: vec![] })
                 }
             }
         }).clone()

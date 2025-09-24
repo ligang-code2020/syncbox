@@ -156,12 +156,13 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
     }
 
     // 4. 处理同步队列
-    let mut processed_size = 0;
+    // let mut processed_size = 0;
 
     if options.dry_run {
         // Dry-run 模式：列出所有将被同步的文件
         for (source_info, _target_path) in &sync_queue {
-            report.copied.push(source_info.path.clone());
+            // report.copied.push(source_info.path.clone());
+            report.copied.push((*source_info.path).to_path_buf());
         }
     } else {
         // 正常模式：初始化进度条
@@ -211,15 +212,16 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
         // 等待所有任务完成
         while let Some(result) = tasks.next().await {
             match result {
-                Ok((Ok(()), source_path, target_path, source_display, target_display)) => {
-                    report.copied.push(source_path);
+                Ok((Ok(()), source_path, _target_path, source_display, target_display)) => {
+                    report.copied.push((source_path).to_path_buf());
+                // report.copied.push(source_path);
                     debug!(
                         source = %source_display,
                         target = %target_display,
                         "File copied"
                     );
                 }
-                Ok((Err(e), source_path, target_path, source_display, target_display)) => {
+                Ok((Err(e), _source_path, target_path, source_display, target_display)) => {
                     warn!(
                         error = ?e,
                         source = %source_display,

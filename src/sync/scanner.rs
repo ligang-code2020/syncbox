@@ -4,6 +4,7 @@ use super::types::FileInfo;
 use super::filter::{ExcludeMatcher};
 use crate::infra::error::SyncError;
 use std::path::Path;
+use std::sync::Arc;
 use tracing::warn;
 
 // ==============================================
@@ -47,7 +48,7 @@ pub fn scan_directory<P: AsRef<Path>>(
     // 2. 使用 WalkDir 非递归方式收集所有文件路径（过滤排除项）
     let entries: Vec<_> = WalkDir::new(root)
         .into_iter()
-        .filter_map(|e| {
+        .filter_map(|e| -> Option<Arc<Path>>  {
             let entry = match e {
                 Ok(entry) => entry,
                 Err(e) => {
@@ -64,20 +65,20 @@ pub fn scan_directory<P: AsRef<Path>>(
             if matcher.is_excluded(path, root) {
                 return None;
             }
-            Some(path.to_path_buf())
+            Some(Arc::from(path))
         })
         .collect();
 
     // 3. 并行处理每个文件路径，构建 FileInfo
     let files: Vec<_> = entries
         .par_iter() // 👈 使用 rayon 并行迭代
-        .filter_map(|path| {
-            match FileInfo::from_path(path, compute_hash) {
+        .filter_map(|path_arc| {
+            match FileInfo::from_path(path_arc.as_ref(), compute_hash) {
                 Ok(info) => Some(info),
                 Err(e) => {
                     warn!(
                         error = ?e,
-                        path = %path.display(),
+                        path = %path_arc.display(),
                         "Failed to read file metadata"
                     );
                     None

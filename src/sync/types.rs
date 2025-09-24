@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use crate::{cli, config};
 use super::file_ops::compute_blake3_hash;
+use std::sync::Arc;
 
 // ==============================================
 // 公共类型定义
@@ -11,7 +12,7 @@ use super::file_ops::compute_blake3_hash;
 #[derive(Debug, Clone)]
 pub struct FileInfo {
     // 文件目录
-    pub path: PathBuf,
+    pub path: Arc<Path>,
     // 系统时间
     pub mtime: SystemTime,
     // 文件大小
@@ -41,7 +42,7 @@ impl FileInfo {
             None
         };
         Ok(FileInfo {
-            path: path.to_path_buf(),
+            path: Arc::from(path), // 👈 关键修改：从 &Path 创建 Arc<Path>
             mtime: metadata.modified()?,
             size: metadata.len(),
             blake3_hash,
