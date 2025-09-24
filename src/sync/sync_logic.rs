@@ -1,17 +1,21 @@
-use chrono::Utc;
-use crate::utils::create_progress_bar;
-use std::collections::HashMap;
-use super::scanner::scan_directory; // 确保使用的是我们刚优化过的并行版本
-use super::types::{FileInfo,SyncParameters};
-use super::filter::should_sync;
 use super::file_ops::{copy_file, delete_extra_files};
-use super::report::{print_report, SyncReport};
+use super::filter::should_sync;
+use super::report::{SyncReport, print_report};
+use super::scanner::scan_directory; // 确保使用的是我们刚优化过的并行版本
+use super::types::{FileInfo, SyncParameters};
+use crate::utils::create_progress_bar;
+use chrono::Utc;
+use futures::stream::{FuturesUnordered, StreamExt};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
 // ==============================================
 // 模块 4：同步逻辑（SyncLogic）
 // ==============================================
-
 
 pub struct SyncOptions {
     pub dry_run: bool,
@@ -32,7 +36,6 @@ impl Default for SyncOptions {
         }
     }
 }
-
 
 /// 执行一次完整的目录同步操作。
 ///
@@ -71,17 +74,17 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
     // 2.预扫描目标目录，构建缓存
     let target_cache: HashMap<String, FileInfo> = if params.target.exists() {
         match scan_directory(&params.target, &options.excludes, options.checksum) {
-            Ok(target_files) => {
-                target_files
-                    .into_iter()
-                    .filter_map(|info| {
-                        let relative = info.path.strip_prefix(&params.target)
-                            .map(|p| p.to_string_lossy().to_string())
-                            .ok();
-                        relative.map(|rel| (rel, info))
-                    })
-                    .collect()
-            }
+            Ok(target_files) => target_files
+                .into_iter()
+                .filter_map(|info| {
+                    let relative = info
+                        .path
+                        .strip_prefix(&params.target)
+                        .map(|p| p.to_string_lossy().to_string())
+                        .ok();
+                    relative.map(|rel| (rel, info))
+                })
+                .collect(),
             Err(e) => {
                 warn!(error = ?e, "Failed to scan target directory, proceeding with empty cache");
                 HashMap::new()
@@ -91,7 +94,6 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
         debug!("Target directory does not exist, skipping target scan");
         HashMap::new()
     };
-
 
     // 2. 预扫描：筛选出需要同步的文件，并计算总大小
     let mut sync_queue = Vec::new();
@@ -123,7 +125,7 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
             &options.excludes,
             &options.delete_excludes,
         )
-            .await?;
+        .await?;
 
         report.deleted = deleted;
         report.would_delete = would_delete;
@@ -132,9 +134,7 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
 
     // 检查是否有需要同步的文件
     if sync_queue.is_empty()
-        && (!options.delete_extra
-        || report.would_delete.is_empty()
-        || report.deleted.is_empty())
+        && (!options.delete_extra || report.would_delete.is_empty() || report.deleted.is_empty())
     {
         // 没有文件需要同步，直接返回
         print_report(
@@ -161,28 +161,71 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
         // 正常模式：初始化进度条
         let pb = create_progress_bar(total_sync_size);
 
+        // 原子计数器，用于并发更新进度
+        let processed_bytes = Arc::new(AtomicU64::new(0));
+
+        // 控制最大并发数（可根据系统调整）
+        let semaphore = Arc::new(Semaphore::new(8));
+
+        // 创建异步任务集合
+        let mut tasks = FuturesUnordered::new();
+
         for (source_info, target_path) in &sync_queue {
-            match copy_file(&source_info.path, target_path, options.dry_run).await {
-                Ok(()) => {
-                    report.copied.push(source_info.path.clone());
-                    processed_size += source_info.size;
-                    pb.set_position(processed_size);
+            let source_path = source_info.path.clone();
+            let target_path_clone = target_path.clone();
+            let size = source_info.size;
+            let pb_clone = pb.clone();
+            let processed_bytes_clone = processed_bytes.clone();
+            let semaphore_clone = semaphore.clone();
+            let source_display = source_path.display().to_string();
+            let target_display = target_path_clone.display().to_string();
+
+            let task = tokio::spawn(async move {
+                // 获取信号量许可（控制并发）
+                let _permit = semaphore_clone.acquire().await.unwrap();
+
+                let result = copy_file(&source_path, &target_path_clone, false).await;
+
+                // 无论成功失败，都更新进度
+                let current = processed_bytes_clone.fetch_add(size, Ordering::Relaxed) + size;
+                pb_clone.set_position(current);
+
+                (
+                    result,
+                    source_path,
+                    target_path_clone,
+                    source_display,
+                    target_display,
+                )
+            });
+
+            tasks.push(task);
+        }
+
+        // 等待所有任务完成
+        while let Some(result) = tasks.next().await {
+            match result {
+                Ok((Ok(()), source_path, target_path, source_display, target_display)) => {
+                    report.copied.push(source_path);
                     debug!(
-                            source = %source_info.path.display(),
-                            target = %target_path.display(),
-                            "File copied"
-                        );
+                        source = %source_display,
+                        target = %target_display,
+                        "File copied"
+                    );
                 }
-                Err(e) => {
+                Ok((Err(e), source_path, target_path, source_display, target_display)) => {
                     warn!(
-                            error = ?e,
-                            source = %source_info.path.display(),
-                            target = %target_path.display(),
-                            "Failed to copy file"
-                        );
-                    report.errors.push((target_path.clone(), e.to_string()));
-                    processed_size += source_info.size;
-                    pb.set_position(processed_size);
+                        error = ?e,
+                        source = %source_display,
+                        target = %target_display,
+                        "Failed to copy file"
+                    );
+                    report.errors.push((target_path, e.to_string()));
+                }
+                Err(join_error) => {
+                    // 任务 panic（理论上不应发生）
+                    warn!(error = ?join_error, "Copy task panicked");
+                    report.errors.push((PathBuf::new(), join_error.to_string()));
                 }
             }
         }
