@@ -4,8 +4,8 @@ name = "task"
 source = "/Users/lg/Desktop/syncbox/source"
 target = "/Users/lg/Desktop/syncbox/target"
 exclude = ["file_1.txt","file_2.txt"]
-delete_extra = false
-delete_extra_exclude = [".DS_Store"]
+delete_extra = true
+delete_extra_exclude = [".DS_Store","file_3.txt","file_6.txt"]
 
 
 

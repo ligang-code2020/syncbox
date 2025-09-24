@@ -171,7 +171,7 @@ pub async fn scan_target_for_deletion(
     current: &PathBuf,
     target_root: &PathBuf,
     source_root: &PathBuf,
-    source_files: &std::collections::HashSet<String>,
+    source_files: &HashSet<String>,
     exclude: &[String],
     delete_exclude: &[String],
     to_delete: &mut Vec<PathBuf>,
@@ -197,7 +197,7 @@ pub async fn scan_target_for_deletion(
             if let Ok(rel_path) = path.strip_prefix(target_root) {
                 let rel_str = rel_path.to_string_lossy().to_string();
                 if !source_files.contains(&rel_str)
-                    && !should_exclude(&path, source_root, exclude)
+                    && !should_exclude(&path, target_root, exclude)
                     && !should_exclude(&path, target_root, delete_exclude)
                 // 应用删除排除
                 {
