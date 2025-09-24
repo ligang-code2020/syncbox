@@ -1,7 +1,7 @@
 use super::file_ops::{copy_file, delete_extra_files};
 use super::filter::should_sync;
 use super::report::{SyncReport, print_report};
-use super::scanner::scan_directory; // 确保使用的是我们刚优化过的并行版本
+use super::scanner::scan_directory;
 use super::types::{FileInfo, SyncParameters};
 use crate::utils::create_progress_bar;
 use chrono::Utc;
@@ -62,6 +62,7 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
         delete_extra: params.delete_extra,
         delete_excludes: params.delete_excludes.clone(),
     };
+
 
     let mut report = SyncReport::default(); // 初始化报告
     println!("当前时间戳1: {}", Utc::now().timestamp());

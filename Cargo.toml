@@ -40,6 +40,7 @@ regex = "1.11.2"
 chrono = "0.4.42"
 rayon = "1.11.0"
 futures = "0.3.31"
+glob = "0.3.3"
 
 
 

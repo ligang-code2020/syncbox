@@ -1,7 +1,7 @@
 use walkdir::WalkDir;
 use rayon::prelude::*;
 use super::types::FileInfo;
-use super::filter::should_exclude;
+use super::filter::{ExcludeMatcher};
 use crate::infra::error::SyncError;
 use std::path::Path;
 use tracing::warn;
@@ -40,6 +40,10 @@ pub fn scan_directory<P: AsRef<Path>>(
         return Err(SyncError::SourceNotFound(root.to_path_buf()));
     }
 
+    // 2. 预编译排除规则
+    let matcher = ExcludeMatcher::new(exclude_patterns)
+        .map_err(|e| SyncError::IoError(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
+
     // 2. 使用 WalkDir 非递归方式收集所有文件路径（过滤排除项）
     let entries: Vec<_> = WalkDir::new(root)
         .into_iter()
@@ -56,8 +60,8 @@ pub fn scan_directory<P: AsRef<Path>>(
             if !path.is_file() {
                 return None;
             }
-            // 检查是否排除
-            if should_exclude(path, root, exclude_patterns) {
+            // 👇 使用预编译 matcher 快速判断
+            if matcher.is_excluded(path, root) {
                 return None;
             }
             Some(path.to_path_buf())

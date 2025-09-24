@@ -1,10 +1,68 @@
-use std::path::Path;
 use super::types::{FileInfo};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use glob::Pattern;
+// use once_cell::sync::OnceCell;
+use tracing::debug;
 
 // ==============================================
 // 模块 2：过滤器（Filter）
 // 负责判断文件是否应被排除或同步
 // ==============================================
+
+#[derive(Debug, Clone)]
+pub struct ExcludeMatcher {
+    patterns: Vec<Pattern>,
+    exclude_strings: Vec<String>, // 用于调试/日志
+}
+
+impl ExcludeMatcher {
+    pub fn new(exclude_patterns: &[String]) -> anyhow::Result<Self> {
+        let mut compiled = Vec::with_capacity(exclude_patterns.len());
+        for pat in exclude_patterns {
+            let glob_pat = Pattern::new(pat)
+                .map_err(|e| anyhow::anyhow!("Invalid glob pattern '{}': {}", pat, e))?;
+            compiled.push(glob_pat);
+        }
+
+        debug!(patterns = ?exclude_patterns, "Compiled {} exclude patterns", compiled.len());
+
+        Ok(Self {
+            patterns: compiled,
+            exclude_strings: exclude_patterns.to_vec(),
+        })
+    }
+
+    /// 检查 path 是否应被排除
+    /// path: 绝对路径
+    /// root: 源根目录（用于计算相对路径）
+    pub fn is_excluded(&self, path: &Path, root: &Path) -> bool {
+        // 1. 检查是否是系统文件（保持原有逻辑）
+        if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+            if file_name == ".DS_Store" || file_name.starts_with("._") {
+                return true;
+            }
+        }
+
+        // 2. 计算相对路径（只计算一次）
+        let relative = match path.strip_prefix(root) {
+            Ok(r) => r,
+            Err(_) => return false, // 不在根目录下？不推荐，但安全处理
+        };
+
+        let relative_str = relative.to_string_lossy();
+
+        // 3. 使用预编译的 glob pattern 快速匹配
+        for pattern in &self.patterns {
+            if pattern.matches_path(relative) || pattern.matches(&relative_str) {
+                return true;
+            }
+        }
+
+        false
+    }
+}
+
 
 
 /// 判断指定路径是否应被排除在同步之外。
