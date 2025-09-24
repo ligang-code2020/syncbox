@@ -2,8 +2,14 @@ use super::types::{FileInfo};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use glob::Pattern;
-// use once_cell::sync::OnceCell;
 use tracing::debug;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use parking_lot::Mutex; // 轻量级锁，比 std::sync::Mutex 快
+
+// 缓存：key = 排除规则的排序后拼接字符串，value = 编译好的 matcher
+static EXCLUDE_MATCHER_CACHE: Lazy<Mutex<HashMap<String, Arc<ExcludeMatcher>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 // ==============================================
 // 模块 2：过滤器（Filter）
@@ -84,51 +90,31 @@ impl ExcludeMatcher {
 /// - 含 `*`：视为通配符（转换为正则 `.*`）。
 /// - 默认排除 macOS 系统文件。
 pub fn should_exclude(path: &Path, root: &Path, exclude_patterns: &[String]) -> bool {
-    // 我们需要将路径转换为“相对于 root 的路径”
-    // 比如：/Users/you/syncbox-tests/src/a.tmp → a.tmp
-    let relative = match path.strip_prefix(root) {
-        Ok(rel) => rel,
-        Err(_) => return false, // 无法计算相对路径，不排除
-    };
+    if exclude_patterns.is_empty() {
+        return false;
+    }
 
-    // 将相对路径转成字符串
-    let relative_str = relative.to_string_lossy();
+    // 生成缓存 key：排序 + 拼接，确保相同规则集命中同一缓存
+    let mut key_parts = exclude_patterns.to_vec();
+    key_parts.sort_unstable();
+    let cache_key = key_parts.join("|");
 
-    // 检查每个排除规则
-    for pattern in exclude_patterns {
-        // 简单实现：支持后缀匹配（.tmp）和目录匹配（Secret/）
-        if pattern.starts_with('/') {
-            // 如果规则以 / 开头，匹配完整路径（从 root 开始）
-            if relative_str.starts_with(&pattern[1..]) {
-                return true;
-            }
-        } else if pattern.ends_with('/') {
-            // 如果规则以 / 结尾，匹配目录
-            if relative_str.starts_with(&*pattern)
-                || relative_str.contains(&format!("/{}", pattern))
-            {
-                return true;
-            }
-        } else {
-            // 将通配符 * 转换为正则的 .*，支持 *.log 匹配所有 .log 后缀文件
-            let regex_pattern = pattern.replace('*', ".*");
-            if let Ok(regex) = regex::Regex::new(&format!("^{}$", regex_pattern)) {
-                if regex.is_match(&relative_str) {
-                    return true;
+    // 从缓存获取或创建 matcher
+    let matcher = {
+        let mut cache = EXCLUDE_MATCHER_CACHE.lock();
+        cache.entry(cache_key.clone()).or_insert_with(|| {
+            match ExcludeMatcher::new(&exclude_patterns) {
+                Ok(m) => Arc::new(m),
+                Err(e) => {
+                    tracing::error!(error = ?e, patterns = ?exclude_patterns, "Failed to compile exclude patterns");
+                    // 如果编译失败，退化为不排斥（安全策略）
+                    Arc::new(ExcludeMatcher { patterns: vec![], exclude_strings: vec![] })
                 }
             }
-        }
-    }
+        }).clone()
+    };
 
-    // 排除默认系统文件
-    if let Some(name) = relative.file_name().and_then(|s| s.to_str()) {
-        matches!(
-                name,
-                ".DS_Store" | ".fseventsd" | ".Trashes" | ".Spotlight-V100" | ".TemporaryItems"
-            ) || name.starts_with("._") // AppleDouble 文件
-    } else {
-        false
-    }
+    matcher.is_excluded(path, root)
 }
 
 
