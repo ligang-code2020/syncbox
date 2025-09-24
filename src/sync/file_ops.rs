@@ -6,7 +6,9 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::Semaphore;
 use std::sync::Arc;
 use std::collections::HashSet;
-
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::fs::File;
 // ==============================================
 // 模块 3：文件操作（FileOps）
 // 负责实际的文件复制、删除等操作
@@ -25,18 +27,33 @@ use std::collections::HashSet;
 /// * `Ok(())` - 复制成功或 dry-run 模式。
 /// * `Err(std::io::Error)` - 创建目录或复制文件失败。
 
-pub async fn copy_file(source: &Path, target: &Path, dry_run: bool) -> std::io::Result<()> {
+pub async fn copy_file(source: &Path, target: &Path, dry_run: bool,progress_counter: Option<&Arc<AtomicU64>>,) -> std::io::Result<()> {
     if dry_run {
         return Ok(());
     }
 
-    // 创建目标目录
     if let Some(parent) = target.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    // 执行复制
-    tokio::fs::copy(source, target).await?;
+    let mut src = File::open(source).await?;
+    let mut dst = File::create(target).await?;
+
+    let mut buffer = vec![0u8; 64 * 1024]; // 64KB
+    loop {
+        match src.read(&mut buffer).await {
+            Ok(0) => break, // EOF
+            Ok(n) => {
+                dst.write_all(&buffer[..n]).await?;
+                if let Some(counter) = progress_counter {
+                    counter.fetch_add(n as u64, Ordering::Relaxed);
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    dst.flush().await?;
     Ok(())
 }
 

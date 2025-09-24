@@ -174,6 +174,27 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
         // 控制最大并发数（可根据系统调整）
         let semaphore = Arc::new(Semaphore::new(8));
 
+        // 👇 新增：用于通知进度刷新任务立即结束
+        use tokio::sync::Notify;
+        let notify = Arc::new(Notify::new());
+        let notify_clone = notify.clone();
+
+        // 👇 新增：启动进度刷新任务
+        let pb_clone_for_refresh = pb.clone();
+        let processed_bytes_for_refresh = processed_bytes.clone();
+        let refresh_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
+            loop {
+                interval.tick().await;
+                let pos = processed_bytes_for_refresh.load(Ordering::Relaxed);
+                if pos >= total_sync_size {
+                    break;
+                }
+                pb_clone_for_refresh.set_position(pos);
+            }
+            pb_clone_for_refresh.set_position(total_sync_size); // 确保最终对齐
+        });
+
         // 创建异步任务集合
         let mut tasks = FuturesUnordered::new();
 
@@ -191,7 +212,11 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
                 // 获取信号量许可（控制并发）
                 let _permit = semaphore_clone.acquire().await.unwrap();
 
-                let result = copy_file(&source_path, &target_path_clone, false).await;
+                let progress_cb = |bytes: u64| {
+                    let _ = processed_bytes_clone.fetch_add(bytes, Ordering::Relaxed);
+                };
+
+                let result = copy_file(&source_path, &target_path_clone, false, Some(&processed_bytes_clone)).await;
 
                 // 无论成功失败，都更新进度
                 let current = processed_bytes_clone.fetch_add(size, Ordering::Relaxed) + size;
@@ -237,6 +262,10 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
                 }
             }
         }
+        notify.notify_waiters();
+
+        // 等待刷新任务退出（现在会立即返回）
+        let _ = refresh_handle.await;
 
         pb.finish_with_message("File sync completed");
     }
