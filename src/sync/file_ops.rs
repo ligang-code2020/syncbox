@@ -2,6 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use super::scanner::{scan_directory};
 use super::filter::should_exclude;
+use futures::stream::{FuturesUnordered, StreamExt};
+use tokio::sync::Semaphore;
+use std::sync::Arc;
+use std::collections::HashSet;
 
 // ==============================================
 // 模块 3：文件操作（FileOps）
@@ -76,9 +80,9 @@ pub async fn delete_extra_files(
     exclude: &[String],
     delete_exclude: &[String],
 ) -> anyhow::Result<(Vec<PathBuf>, Vec<PathBuf>, Vec<(PathBuf, String)>)> {
-    use std::collections::HashSet;
 
-    // 1. 扫描源目录，收集所有文件的相对路径（String）
+
+    // 扫描源目录，收集所有文件的相对路径
     let source_files: HashSet<String> = scan_directory(source, exclude, false)?
         .into_iter()
         .filter_map(|info| {
@@ -89,7 +93,7 @@ pub async fn delete_extra_files(
         })
         .collect();
 
-    // // 2. 递归遍历目标目录
+    // 递归遍历目标目录
     let mut to_delete = Vec::new();
     scan_target_for_deletion(
         target,
@@ -107,18 +111,37 @@ pub async fn delete_extra_files(
     let mut would_delete = Vec::new();
     let mut delete_errors = Vec::new();
 
-    // 3. 执行删除
-    for path in &to_delete {
-        if dry_run {
-            would_delete.push(path.clone());
-        } else {
-            match tokio::fs::remove_file(path).await {
-                Ok(()) => {
+    // 执行删除
+    if dry_run {
+        would_delete = to_delete.clone();
+    } else {
+        let semaphore = Arc::new(Semaphore::new(16)); // 控制并发数
+        let mut tasks = FuturesUnordered::new();
+
+        for path in &to_delete {
+            let path_clone = path.clone();
+            let semaphore_clone = semaphore.clone();
+
+            let task = tokio::spawn(async move {
+                let _permit = semaphore_clone.acquire().await.unwrap();
+                let result = tokio::fs::remove_file(&path_clone).await;
+                (result, path_clone)
+            });
+
+            tasks.push(task);
+        }
+
+        while let Some(result) = tasks.next().await {
+            match result {
+                Ok((Ok(()), path)) => {
                     deleted.push(path.clone());
-                    would_delete.push(path.clone());
+                    would_delete.push(path);
                 }
-                Err(e) => {
-                    delete_errors.push((path.clone(), e.to_string()));
+                Ok((Err(e), path)) => {
+                    delete_errors.push((path, e.to_string()));
+                }
+                Err(join_error) => {
+                    delete_errors.push((PathBuf::new(), join_error.to_string()));
                 }
             }
         }

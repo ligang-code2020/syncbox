@@ -119,6 +119,11 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
     }
 
     if options.delete_extra {
+        if !params.target.exists() {
+            std::fs::create_dir_all(&params.target)
+                .map_err(|e| anyhow::anyhow!("Failed to create target directory for deletion: {}", e))?;
+        }
+
         let (deleted, would_delete, delete_errors) = delete_extra_files(
             &params.source,
             &params.target,
