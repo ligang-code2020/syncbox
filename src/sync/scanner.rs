@@ -1,9 +1,10 @@
-use std::fs;
-use super::types::{FileInfo};
+use walkdir::WalkDir;
+use rayon::prelude::*;
+use super::types::FileInfo;
+use super::filter::should_exclude;
 use crate::infra::error::SyncError;
 use std::path::Path;
-use tracing::{debug, warn};
-use super::filter::{should_exclude};
+use tracing::warn;
 
 // ==============================================
 // 模块 1：扫描器（Scanner）
@@ -32,7 +33,6 @@ pub fn scan_directory<P: AsRef<Path>>(
     exclude_patterns: &[String],
     compute_hash: bool,
 ) -> Result<Vec<FileInfo>, SyncError> {
-    let mut files = Vec::new();
     let root = root.as_ref();
 
     // 1. 检查目录是否存在
@@ -40,60 +40,47 @@ pub fn scan_directory<P: AsRef<Path>>(
         return Err(SyncError::SourceNotFound(root.to_path_buf()));
     }
 
-    // 2. 读取目录
-    let entries = fs::read_dir(root).map_err(|e| {
-        debug!(
-                error = ?e,
-                path = %root.display(),
-                "Failed to read directory"
-            );
-        SyncError::IoError(e)
-    })?;
-
-    // 3. 遍历条目
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(e) => {
-                warn!(
-                        error = ?e,
-                        dir = %root.display(),
-                        "Failed to read directory entry"
-                    );
-                continue;
-            }
-        };
-
-        let path = entry.path();
-
-        // 4. 检查是否排除
-        if should_exclude(&path, root, exclude_patterns) {
-            debug!(path = %path.display(), "Skipped (excluded)");
-            continue;
-        }
-
-        if path.is_dir() {
-            match scan_directory(&path, exclude_patterns, compute_hash) {
-                Ok(mut sub_files) => {
-                    files.append(&mut sub_files);
-                }
+    // 2. 使用 WalkDir 非递归方式收集所有文件路径（过滤排除项）
+    let entries: Vec<_> = WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| {
+            let entry = match e {
+                Ok(entry) => entry,
                 Err(e) => {
-                    return Err(e);
+                    warn!(error = ?e, "Failed to read directory entry");
+                    return None;
                 }
+            };
+            let path = entry.path();
+            // 跳过目录（我们只关心文件）
+            if !path.is_file() {
+                return None;
             }
-        } else {
-            match FileInfo::from_path(&path, compute_hash) {
-                Ok(info) => files.push(info),
+            // 检查是否排除
+            if should_exclude(path, root, exclude_patterns) {
+                return None;
+            }
+            Some(path.to_path_buf())
+        })
+        .collect();
+
+    // 3. 并行处理每个文件路径，构建 FileInfo
+    let files: Vec<_> = entries
+        .par_iter() // 👈 使用 rayon 并行迭代
+        .filter_map(|path| {
+            match FileInfo::from_path(path, compute_hash) {
+                Ok(info) => Some(info),
                 Err(e) => {
                     warn!(
-                            error = ?e,
-                            path = %path.display(),
-                            "Failed to read file metadata"
-                        );
+                        error = ?e,
+                        path = %path.display(),
+                        "Failed to read file metadata"
+                    );
+                    None
                 }
             }
-        }
-    }
+        })
+        .collect();
 
     Ok(files)
 }
