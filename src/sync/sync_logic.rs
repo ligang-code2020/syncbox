@@ -1,12 +1,12 @@
 use chrono::Utc;
-use tracing::{debug, warn};
 use crate::utils::create_progress_bar;
-use super::file_ops::{copy_file, delete_extra_files};
+use std::collections::HashMap;
+use super::scanner::scan_directory; // 确保使用的是我们刚优化过的并行版本
+use super::types::{FileInfo,SyncParameters};
 use super::filter::should_sync;
+use super::file_ops::{copy_file, delete_extra_files};
 use super::report::{print_report, SyncReport};
-pub use super::scanner::{scan_directory};
-use super::types::{FileInfo, SyncParameters};
-
+use tracing::{debug, warn};
 
 // ==============================================
 // 模块 4：同步逻辑（SyncLogic）
@@ -68,6 +68,31 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
         .map_err(|e| anyhow::anyhow!("Failed to scan source directory -> {}", e))?;
     println!("当前时间戳2: {}", Utc::now().timestamp());
 
+    // 2.预扫描目标目录，构建缓存
+    let target_cache: HashMap<String, FileInfo> = if params.target.exists() {
+        match scan_directory(&params.target, &options.excludes, options.checksum) {
+            Ok(target_files) => {
+                target_files
+                    .into_iter()
+                    .filter_map(|info| {
+                        let relative = info.path.strip_prefix(&params.target)
+                            .map(|p| p.to_string_lossy().to_string())
+                            .ok();
+                        relative.map(|rel| (rel, info))
+                    })
+                    .collect()
+            }
+            Err(e) => {
+                warn!(error = ?e, "Failed to scan target directory, proceeding with empty cache");
+                HashMap::new()
+            }
+        }
+    } else {
+        debug!("Target directory does not exist, skipping target scan");
+        HashMap::new()
+    };
+
+
     // 2. 预扫描：筛选出需要同步的文件，并计算总大小
     let mut sync_queue = Vec::new();
     let mut total_sync_size: u64 = 0;
@@ -77,15 +102,14 @@ pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncRep
             .path
             .strip_prefix(&params.source)
             .expect("File not under source root");
+
+        let relative_str = relative.to_string_lossy().to_string();
         let target_path = params.target.join(relative);
-        let target_info = if target_path.exists() {
-            FileInfo::from_path(&target_path, options.checksum).ok()
-        } else {
-            None
-        };
+
+        let target_info = target_cache.get(&relative_str);
 
         // 判断是否需要同步，只将需要同步的文件加入队列
-        if should_sync(source_info, target_info.as_ref(), options.checksum) {
+        if should_sync(source_info, target_info, options.checksum) {
             sync_queue.push((source_info.clone(), target_path));
             total_sync_size += source_info.size;
         }
