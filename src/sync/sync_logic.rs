@@ -7,6 +7,12 @@ use super::report::{print_report, SyncReport};
 pub use super::scanner::{scan_directory};
 use super::types::{FileInfo, SyncParameters};
 
+
+// ==============================================
+// 模块 4：同步逻辑（SyncLogic）
+// ==============================================
+
+
 pub struct SyncOptions {
     pub dry_run: bool,
     pub excludes: Vec<String>,
@@ -27,25 +33,24 @@ impl Default for SyncOptions {
     }
 }
 
-/// 执行一次完整的目录同步
+
+/// 执行一次完整的目录同步操作。
 ///
-/// # 策略
-/// 1. 扫描源目录
-/// 2. 扫描目标目录
-/// 3. 复制新/更新的文件
-/// 4. （可选）删除目标目录中多余的文件
+/// 包括扫描源目录、比对目标文件、复制差异文件、可选删除多余文件。
 ///
 /// # 参数
-/// - `source`: 源目录
-/// - `target`: 目标目录
-/// - `dry_run`: 是否为试运行（不实际修改文件）
-/// - `excludes`: 排除规则
-/// - `delete_extra`: 是否删除目标目录中多余的文件
+/// * `params` - 同步参数结构体，包含源/目标路径、dry-run、checksum、排除规则等。
 ///
 /// # 返回
-/// - `Ok(SyncReport)`: 同步结果报告
-/// - `Err(_)`: 致命错误（如源目录不存在）
-
+/// * `Ok(SyncReport)` - 同步操作报告，包含成功、失败、删除等统计信息。
+/// * `Err(anyhow::Error)` - 扫描、复制或删除过程中发生致命错误。
+///
+/// # 流程
+/// 1. 扫描源目录。
+/// 2. 构建同步队列（需复制的文件）。
+/// 3.（可选）删除目标端多余文件。
+/// 4. 执行文件复制（带进度条）。
+/// 5. 生成并打印报告。
 pub async fn sync_directories(params: &SyncParameters) -> anyhow::Result<SyncReport> {
     let options = SyncOptions {
         dry_run: params.dry_run,

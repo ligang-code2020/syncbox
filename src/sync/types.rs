@@ -4,6 +4,10 @@ use std::time::SystemTime;
 use crate::{cli, config};
 use super::file_ops::compute_blake3_hash;
 
+// ==============================================
+// 公共类型定义
+// ==============================================
+
 #[derive(Debug, Clone)]
 pub struct FileInfo {
     // 文件目录
@@ -17,7 +21,18 @@ pub struct FileInfo {
 }
 
 impl FileInfo {
-    /// 从路径创建 FileInfo
+    /// 从指定路径构造一个 `FileInfo` 实例。
+    ///
+    /// # 参数
+    /// * `path` - 要读取的文件或目录路径。
+    /// * `compute_hash` - 是否计算文件内容的 BLAKE3 哈希值（仅对文件有效）。
+    ///
+    /// # 返回
+    /// * `Ok(FileInfo)` - 成功获取文件元数据。
+    /// * `Err(std::io::Error)` - 读取文件元数据或计算哈希失败。
+    ///
+    /// # 注意
+    /// 若 `compute_hash` 为 `true` 且路径指向目录，哈希值将为 `None`。
     pub fn from_path(path: &Path, compute_hash: bool) -> std::io::Result<Self> {
         let metadata = fs::metadata(path)?;
         let blake3_hash = if compute_hash && metadata.is_file() {
@@ -33,18 +48,33 @@ impl FileInfo {
         })
     }
 
-    /// 默认策略：比较两个文件的修改时间和大小
+    /// 判断当前文件是否比目标文件“更新”。
+    ///
+    /// 默认同步策略依据：修改时间（mtime）或文件大小。
+    ///
+    /// # 返回
+    /// * `true` - 当前文件修改时间更新，或大小不同，应被同步。
+    /// * `false` - 目标文件更新或完全一致，无需同步。
     pub fn is_newer_than(&self, target: &Self) -> bool {
         self.mtime > target.mtime || self.size != target.size
     }
 
-    /// 增强策略：比较两个文件是否内容相同（用于哈希模式）
+    /// 判断当前文件与目标文件内容是否完全一致。
+    ///
+    /// 用于启用 `--checksum` 时的精确同步策略。
+    ///
+    /// # 返回
+    /// * `true` - 文件大小和 BLAKE3 哈希值均相同。
+    /// * `false` - 大小或哈希任一不同。
+    ///
+    /// # Panics
+    /// 若任一文件未计算哈希（`blake3_hash` 为 `None`），行为未定义（应确保调用前已计算）。
     pub fn content_eq(&self, other: &Self) -> bool {
         self.size == other.size && self.blake3_hash == other.blake3_hash
     }
 }
 
-// 定义统一的同步参数结构
+/// 定义统一的同步参数结构
 #[derive(Debug, Clone)]
 pub struct SyncParameters {
     /// 源目录
@@ -65,7 +95,7 @@ pub struct SyncParameters {
     pub detail: bool,
 }
 
-// 实现从不同来源转换为统一参数
+/// 实现从不同来源转换为统一参数
 impl From<&cli::Command> for SyncParameters {
     fn from(cmd: &cli::Command) -> Self {
         match cmd {
@@ -128,7 +158,7 @@ impl From<&cli::Command> for SyncParameters {
     }
 }
 
-// 从配置任务转换
+/// 从配置任务转换
 impl From<&config::SyncTask> for SyncParameters {
     fn from(task: &config::SyncTask) -> Self {
         Self {

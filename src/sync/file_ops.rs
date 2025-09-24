@@ -3,18 +3,24 @@ use std::path::{Path, PathBuf};
 use super::scanner::{scan_directory};
 use super::filter::should_exclude;
 
-/// 复制文件（自动创建目标目录）
+// ==============================================
+// 模块 3：文件操作（FileOps）
+// 负责实际的文件复制、删除等操作
+// ==============================================
+
+/// 异步复制文件从源路径到目标路径。
+///
+/// 自动创建目标路径的父目录。支持 dry-run 模式。
 ///
 /// # 参数
-/// - `src`: 源文件路径
-/// - `dst`: 目标文件路径
+/// * `source` - 源文件路径。
+/// * `target` - 目标文件路径。
+/// * `dry_run` - 若为 `true`，仅模拟操作，不实际复制。
 ///
-/// # 行为
-/// 1. 确保目标目录存在（自动创建）
-/// 2. 执行文件复制
-///
-/// # 注意
-/// 使用 `tokio::fs::copy`，保留元信息（如修改时间）。
+/// # 返回
+/// * `Ok(())` - 复制成功或 dry-run 模式。
+/// * `Err(std::io::Error)` - 创建目录或复制文件失败。
+
 pub async fn copy_file(source: &Path, target: &Path, dry_run: bool) -> std::io::Result<()> {
     if dry_run {
         return Ok(());
@@ -30,6 +36,14 @@ pub async fn copy_file(source: &Path, target: &Path, dry_run: bool) -> std::io::
     Ok(())
 }
 
+/// 计算指定文件的 BLAKE3 哈希值。
+///
+/// # 参数
+/// * `path` - 要计算哈希的文件路径。
+///
+/// # 返回
+/// * `Ok([u8; 32])` - 成功计算的 32 字节哈希值。
+/// * `Err(std::io::Error)` - 文件打开或读取失败。
 pub fn compute_blake3_hash(path: &Path) -> std::io::Result<[u8; 32]> {
     let mut file = fs::File::open(path)?;
     let mut hasher = blake3::Hasher::new();
@@ -37,14 +51,24 @@ pub fn compute_blake3_hash(path: &Path) -> std::io::Result<[u8; 32]> {
     Ok(hasher.finalize().into())
 }
 
-/// 删除文件（安全删除，记录错误）
+
+/// 扫描目标目录，找出并删除“多余”文件（即源目录中不存在的文件）。
+///
+/// 支持排除规则和 dry-run 模式。
 ///
 /// # 参数
-/// - `path`: 要删除的文件路径
+/// * `source` - 源目录路径。
+/// * `target` - 目标目录路径。
+/// * `dry_run` - 是否仅模拟删除。
+/// * `exclude` - 同步排除规则（也用于判断是否“多余”）。
+/// * `delete_exclude` - 删除操作的额外排除规则。
 ///
-/// # 注意
-/// 不会 panic，错误会返回或记录日志。
-
+/// # 返回
+/// * `Ok((deleted, would_delete, delete_errors))`
+///   - `deleted`: 实际删除的文件列表。
+///   - `would_delete`: dry-run 模式下拟删除的文件列表。
+///   - `delete_errors`: 删除失败的文件及错误信息。
+/// * `Err(anyhow::Error)` - 扫描或删除过程中发生错误。
 pub async fn delete_extra_files(
     source: &PathBuf,
     target: &PathBuf,
@@ -103,16 +127,23 @@ pub async fn delete_extra_files(
     Ok((deleted, would_delete, delete_errors))
 }
 
-/// 递归扫描目标目录，找出需要删除的文件（源目录中没有）
+
+/// 递归遍历目标目录，收集待删除的“多余”文件路径。
+///
+/// 内部辅助函数，不对外暴露。
 ///
 /// # 参数
-/// - `source_files`: 源目录的文件列表
-/// - `target_root`: 目标根目录
-/// - `excludes`: 排除规则
+/// * `current` - 当前遍历的目录路径。
+/// * `target_root` - 目标目录根路径（用于计算相对路径）。
+/// * `source_root` - 源目录根路径（用于排除判断）。
+/// * `source_files` - 源目录中所有文件的相对路径集合。
+/// * `exclude` - 同步排除规则。
+/// * `delete_exclude` - 删除排除规则。
+/// * `to_delete` - 输出参数，收集待删除路径。
 ///
 /// # 返回
-/// - `Ok(Vec<PathBuf>)`: 可以安全删除的文件列表
-
+/// * `Ok(())` - 遍历完成。
+/// * `Err(std::io::Error)` - 读取目录失败。
 pub async fn scan_target_for_deletion(
     current: &PathBuf,
     target_root: &PathBuf,

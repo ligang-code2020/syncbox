@@ -5,6 +5,11 @@ use num_format::{Locale, ToFormattedString};
 use tracing::{info, warn};
 use crate::utils::format_file_size;
 
+// ==============================================
+// 模块 6：输出结果报告
+// 统一输出同步、删除结果
+// ==============================================
+
 /// 同步操作的结果报告
 #[derive(Debug, Default)]
 pub struct SyncReport {
@@ -15,7 +20,25 @@ pub struct SyncReport {
     pub delete_errors: Vec<(PathBuf, String)>, // 删除错误
 }
 
-/// 统一打印同步和删除的结果
+/// 生成并打印同步操作的详细报告。
+///
+/// 统一输出同步和删除操作的结果，支持详细模式和 dry-run 模式。
+///
+/// # 参数
+/// * `is_latest` - 是否为“无变更”状态（用于打印特定提示）。
+/// * `report` - 同步操作结果报告。
+/// * `dry_run` - 是否为试运行模式。
+/// * `delete_extra` - 是否启用了删除多余文件功能。
+/// * `total_source_files` - 源目录文件总数。
+/// * `total_sync_size` - 待同步/已同步文件总大小（字节）。
+/// * `detail` - 是否显示详细文件列表。
+///
+/// # 输出
+/// 打印到日志（`tracing::info!`）和/或标准输出，包含：
+/// - 同步文件数/大小
+/// - 错误数（如有）
+/// - 删除文件数（如有）
+/// - 详细文件列表（如启用）
 pub fn print_report(
     is_latest: bool,
     report: &SyncReport,

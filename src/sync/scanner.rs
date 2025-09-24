@@ -1,21 +1,32 @@
 use std::fs;
-use super::types::{FileInfo}; 
-use crate::infra::error::SyncError; 
+use super::types::{FileInfo};
+use crate::infra::error::SyncError;
 use std::path::Path;
 use tracing::{debug, warn};
 use super::filter::{should_exclude};
 
-/// 递归遍历目录，返回所有文件和目录的 `FileInfo` 列表
+// ==============================================
+// 模块 1：扫描器（Scanner）
+// 负责遍历目录，收集文件信息
+// ==============================================
+
+
+/// 递归扫描指定根目录，收集所有非排除文件的元信息。
+///
+/// 遍历目录树，跳过符合排除规则的路径，并可选择是否计算文件哈希。
 ///
 /// # 参数
-/// - `path`: 要扫描的目录路径
+/// * `root` - 要扫描的根目录路径。
+/// * `exclude_patterns` - 排除规则字符串列表（支持通配符、目录匹配）。
+/// * `compute_hash` - 是否为每个文件计算 BLAKE3 内容哈希。
 ///
 /// # 返回
-/// - `Ok(Vec<FileInfo>)`: 扫描到的文件信息列表
-/// - `Err(std::io::Error)`: 扫描过程中发生的 I/O 错误
+/// * `Ok(Vec<FileInfo>)` - 扫描到的所有文件信息列表。
+/// * `Err(SyncError)` - 目录不存在、无权限或 I/O 错误。
 ///
 /// # 注意
-/// 此函数会跳过无法访问的文件或目录，并记录警告日志。
+/// - 遇到无法读取的子目录或文件时记录警告并跳过，不中断整体扫描。
+/// - 默认排除系统文件（如 `.DS_Store`, `._*` 等）。
 pub fn scan_directory<P: AsRef<Path>>(
     root: P,
     exclude_patterns: &[String],

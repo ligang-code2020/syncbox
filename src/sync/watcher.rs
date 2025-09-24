@@ -6,17 +6,28 @@ use super::sync_logic::sync_directories;
 use super::report::SyncReport;
 use super::types::SyncParameters;
 
-/// 启动文件监听任务
+// ==============================================
+// 模块 5：监听器（Watcher）
+// 文件系统监听，实时同步
+// ==============================================
+
+
+/// 启动文件系统监听器，实时同步源目录变更到目标目录。
 ///
-/// # 行为
-/// 监听源目录变化，一旦有文件修改/创建，立即触发同步
+/// 使用 `notify` crate 监听文件事件，支持防抖（debounce）机制。
 ///
 /// # 参数
-/// - `name`: 任务名
-/// - `delay_ms`: 延时操作
+/// * `params` - 同步参数（源/目标路径、排除规则等）。
+/// * `delay_ms` - 防抖延迟时间（毫秒），连续修改后等待此时间再触发同步。
+///
+/// # 返回
+/// * `Ok(SyncReport)` - 累计所有同步操作的报告。
+/// * `Err(SyncError)` - 监听器创建或同步过程中发生错误。
 ///
 /// # 注意
-/// 此函数会阻塞运行，直到监听被中断。
+/// - 通常不启用 `dry_run` 和 `checksum`（由调用方决定）。
+/// - 监听 `Create`, `Modify`, `Remove` 事件。
+/// - 使用异步通道与主循环通信。
 pub async fn watch_task(
     params: &SyncParameters,
     delay_ms: u64,
