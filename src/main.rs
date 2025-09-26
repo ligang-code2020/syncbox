@@ -1,6 +1,7 @@
 use clap::Parser;
 use syncbox::{cli, infra, sync};
 use tracing::{info};
+use syncbox::sync::{sync_directories, SyncParameters};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -21,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
             delete_exclude,
             detail
         } => {
-            let params = sync::SyncParameters {
+            let params = SyncParameters {
                 source: source.clone(),
                 target: target.clone(),
                 dry_run,
@@ -37,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
                 source.display(),
                 target.display()
             );
-            sync::sync_directories(&params).await?;
+            sync_directories(&params).await?;
         }
 
         // ============ RUN TASK 模式 ============

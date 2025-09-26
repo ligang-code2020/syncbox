@@ -8,4 +8,5 @@ Cargo.toml.orig  # 避免 cargo publish 生成的临时文件被上传
 *.swp      # 忽略 Vim 编辑器的临时文件（可选，根据你的编辑器补充）
 .idea/     # 忽略 JetBrains 系列 IDE（如 CLion）的配置目录（可选）
 .vscode/   # 忽略 VS Code 的配置目录（可选，若用 VS Code 开发建议加上）
+syncbox.toml
 

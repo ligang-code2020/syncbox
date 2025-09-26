@@ -1,7 +1,6 @@
-// tests/integration/target_not_writable.rs
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use syncbox::sync::{SyncOptions, SyncParameters};
+use syncbox::sync::{ SyncParameters};
 use syncbox::sync::sync_directories;
 use tempfile::TempDir;
 
